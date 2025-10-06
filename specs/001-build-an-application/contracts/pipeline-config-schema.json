@@ -1,0 +1,113 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Pipeline Configuration Schema",
+  "description": "JSON schema for validating pipeline configuration files",
+  "type": "object",
+  "required": ["pipelineId", "name", "extract", "load"],
+  "properties": {
+    "pipelineId": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+$",
+      "description": "Unique pipeline identifier (lowercase, alphanumeric with hyphens)"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Human-readable pipeline name"
+    },
+    "extract": {
+      "type": "object",
+      "required": ["type", "schemaName"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["kafka", "postgresql", "mysql", "s3"]
+        },
+        "connectionParams": {
+          "type": "object",
+          "additionalProperties": {"type": "string"}
+        },
+        "query": {"type": "string"},
+        "topic": {"type": "string"},
+        "path": {"type": "string"},
+        "schemaName": {"type": "string"},
+        "credentialId": {"type": "string"}
+      }
+    },
+    "transforms": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "parameters"],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["aggregation", "join", "windowing"]
+          },
+          "parameters": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    "load": {
+      "type": "object",
+      "required": ["type", "writeMode", "schemaName"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["kafka", "postgresql", "mysql", "s3"]
+        },
+        "connectionParams": {
+          "type": "object",
+          "additionalProperties": {"type": "string"}
+        },
+        "table": {"type": "string"},
+        "topic": {"type": "string"},
+        "path": {"type": "string"},
+        "writeMode": {
+          "type": "string",
+          "enum": ["append", "overwrite", "upsert"]
+        },
+        "upsertKeys": {
+          "type": "array",
+          "items": {"type": "string"},
+          "minItems": 1
+        },
+        "schemaName": {"type": "string"},
+        "credentialId": {"type": "string"}
+      }
+    },
+    "retry": {
+      "type": "object",
+      "properties": {
+        "maxAttempts": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10,
+          "default": 3
+        },
+        "delaySeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 60,
+          "default": 5
+        }
+      }
+    },
+    "performance": {
+      "type": "object",
+      "properties": {
+        "shufflePartitions": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "broadcastThreshold": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

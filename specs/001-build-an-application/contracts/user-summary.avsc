@@ -1,0 +1,43 @@
+{
+  "type": "record",
+  "name": "UserSummary",
+  "namespace": "com.etl.schema",
+  "doc": "Schema for aggregated user metrics output (post-transformation)",
+  "fields": [
+    {
+      "name": "user_id",
+      "type": "string",
+      "doc": "User identifier (primary key for upsert)"
+    },
+    {
+      "name": "total_events",
+      "type": "long",
+      "doc": "Total count of user events"
+    },
+    {
+      "name": "total_amount",
+      "type": "double",
+      "doc": "Sum of transaction amounts"
+    },
+    {
+      "name": "last_event_time",
+      "type": "long",
+      "logicalType": "timestamp-millis",
+      "doc": "Timestamp of most recent event"
+    },
+    {
+      "name": "event_type_counts",
+      "type": {
+        "type": "map",
+        "values": "long"
+      },
+      "doc": "Count of events by type"
+    },
+    {
+      "name": "updated_at",
+      "type": "long",
+      "logicalType": "timestamp-millis",
+      "doc": "Pipeline execution timestamp"
+    }
+  ]
+}
