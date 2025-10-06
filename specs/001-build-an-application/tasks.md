@@ -15,13 +15,13 @@
 
 ## Phase 3.1: Setup (MUST COMPLETE FIRST)
 
-- [ ] T001 Initialize SBT project structure with build.sbt defining Scala 2.12.18, Java 11, and library dependencies (Spark 3.5.6, Spark Streaming 3.5.6, Avro 1.11.3, ScalaTest 3.2.17)
+- [x] T001 Initialize SBT project structure with build.sbt defining Scala 2.12.18, Java 11, and library dependencies (Spark 3.5.6, Spark Streaming 3.5.6, Avro 1.11.3, ScalaTest 3.2.17)
 
-- [ ] T002 Create project directory structure: src/main/scala/com/etl/{core,extract,transform,load,schema,config,model,util}/, src/main/resources/{schemas,configs}/, src/test/scala/{unit,integration,contract,performance}/
+- [x] T002 Create project directory structure: src/main/scala/com/etl/{core,extract,transform,load,schema,config,model,util}/, src/main/resources/{schemas,configs}/, src/test/scala/{unit,integration,contract,performance}/
 
-- [ ] T003 [P] Configure Scalafmt (scalafmt.conf) and ScalaStyle (scalastyle-config.xml) for code formatting and linting
+- [x] T003 [P] Configure Scalafmt (scalafmt.conf) and ScalaStyle (scalastyle-config.xml) for code formatting and linting
 
-- [ ] T004 [P] Configure logging: create src/main/resources/logback.xml with JSON encoder (logstash-logback-encoder) for structured logging
+- [x] T004 [P] Configure logging: create src/main/resources/logback.xml with JSON encoder (logstash-logback-encoder) for structured logging
 
 ---
 
@@ -41,15 +41,15 @@
 
 ## Phase 3.3: Core Data Models (Foundation for all components)
 
-- [ ] T009 [P] Create WriteMode ADT in src/main/scala/com/etl/model/WriteMode.scala with sealed trait and case objects (Append, Overwrite, Upsert)
+- [x] T009 [P] Create WriteMode ADT in src/main/scala/com/etl/model/WriteMode.scala with sealed trait and case objects (Append, Overwrite, Upsert)
 
-- [ ] T010 [P] Create PipelineState ADT in src/main/scala/com/etl/model/PipelineState.scala with sealed trait and case objects (Created, Running, Retrying, Success, Failed)
+- [x] T010 [P] Create PipelineState ADT in src/main/scala/com/etl/model/PipelineState.scala with sealed trait and case objects (Created, Running, Retrying, Success, Failed)
 
-- [ ] T011 [P] Create ExecutionMetrics case class in src/main/scala/com/etl/model/ExecutionMetrics.scala with fields (pipelineId, executionId, startTime, endTime, recordsExtracted, recordsTransformed, recordsLoaded, recordsFailed, retryCount, errors) and helper methods (duration, successRate)
+- [x] T011 [P] Create ExecutionMetrics case class in src/main/scala/com/etl/model/ExecutionMetrics.scala with fields (pipelineId, executionId, startTime, endTime, recordsExtracted, recordsTransformed, recordsLoaded, recordsFailed, retryCount, errors) and helper methods (duration, successRate)
 
-- [ ] T012 [P] Create PipelineResult sealed trait in src/main/scala/com/etl/model/PipelineResult.scala with PipelineSuccess and PipelineFailure case classes
+- [x] T012 [P] Create PipelineResult sealed trait in src/main/scala/com/etl/model/PipelineResult.scala with PipelineSuccess and PipelineFailure case classes
 
-- [ ] T013 [P] Create configuration case classes in src/main/scala/com/etl/config/PipelineConfig.scala (PipelineConfig, RetryConfig, PerformanceConfig, LoggingConfig, ExtractConfig, TransformConfig, LoadConfig) with SourceType and SinkType enums
+- [x] T013 [P] Create configuration case classes in src/main/scala/com/etl/config/PipelineConfig.scala (PipelineConfig, RetryConfig, PerformanceConfig, LoggingConfig, ExtractConfig, TransformConfig, LoadConfig) with SourceType and SinkType enums
 
 ---
 
