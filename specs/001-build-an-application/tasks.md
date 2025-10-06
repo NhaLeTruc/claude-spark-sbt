@@ -55,39 +55,39 @@
 
 ## Phase 3.4: Schema Management (Required for validation)
 
-- [ ] T014 Copy Avro schema files to src/main/resources/schemas/: user-event.avsc, transaction.avsc, user-summary.avsc from contracts directory
+- [x] T014 Copy Avro schema files to src/main/resources/schemas/: user-event.avsc, transaction.avsc, user-summary.avsc from contracts directory
 
-- [ ] T015 Unit test for SchemaRegistry in src/test/scala/unit/schema/SchemaRegistrySpec.scala - test loading schemas from resources, getSchema method, schema not found error handling
+- [x] T015 Unit test for SchemaRegistry in src/test/scala/unit/schema/SchemaRegistrySpec.scala - test loading schemas from resources, getSchema method, schema not found error handling
 
-- [ ] T016 Implement SchemaRegistry object in src/main/scala/com/etl/schema/SchemaRegistry.scala - load all .avsc files from resources/schemas/, provide getSchema(name: String) method returning Avro Schema
+- [x] T016 Implement SchemaRegistry object in src/main/scala/com/etl/schema/SchemaRegistry.scala - load all .avsc files from resources/schemas/, provide getSchema(name: String) method returning Avro Schema
 
-- [ ] T017 Unit test for SchemaValidator in src/test/scala/unit/schema/SchemaValidatorSpec.scala - test DataFrame schema validation against Avro schema, field type checking, nullable validation
+- [x] T017 Unit test for SchemaValidator in src/test/scala/unit/schema/SchemaValidatorSpec.scala - test DataFrame schema validation against Avro schema, field type checking, nullable validation
 
-- [ ] T018 Implement SchemaValidator in src/main/scala/com/etl/schema/SchemaValidator.scala - validate DataFrame against Avro schema, return validation errors with field-level details
+- [x] T018 Implement SchemaValidator in src/main/scala/com/etl/schema/SchemaValidator.scala - validate DataFrame against Avro schema, return validation errors with field-level details
 
 ---
 
 ## Phase 3.5: Core Traits/Interfaces (Strategy Pattern Foundation)
 
-- [ ] T019 Define Pipeline trait in src/main/scala/com/etl/core/Pipeline.scala with run(context: ExecutionContext): PipelineResult method signature
+- [x] T019 Define Pipeline trait in src/main/scala/com/etl/core/Pipeline.scala with run(context: ExecutionContext): PipelineResult method signature
 
-- [ ] T020 Define Extractor trait in src/main/scala/com/etl/extract/Extractor.scala with extract(config: ExtractConfig)(implicit spark: SparkSession): DataFrame method signature
+- [x] T020 Define Extractor trait in src/main/scala/com/etl/extract/Extractor.scala with extract(config: ExtractConfig)(implicit spark: SparkSession): DataFrame method signature
 
-- [ ] T021 Define Transformer trait in src/main/scala/com/etl/transform/Transformer.scala with transform(df: DataFrame, config: TransformConfig): DataFrame method signature
+- [x] T021 Define Transformer trait in src/main/scala/com/etl/transform/Transformer.scala with transform(df: DataFrame, config: TransformConfig): DataFrame method signature
 
-- [ ] T022 Define Loader trait in src/main/scala/com/etl/load/Loader.scala with load(df: DataFrame, config: LoadConfig, mode: WriteMode): LoadResult method signature
+- [x] T022 Define Loader trait in src/main/scala/com/etl/load/Loader.scala with load(df: DataFrame, config: LoadConfig, mode: WriteMode): LoadResult method signature
 
 ---
 
 ## Phase 3.6: Utility Modules (Shared functionality)
 
-- [ ] T023 Unit test for Retry utility in src/test/scala/unit/util/RetrySpec.scala - test retry logic with 3 attempts, 5 second delays, success after retry, failure after exhausted retries
+- [x] T023 Unit test for Retry utility in src/test/scala/unit/util/RetrySpec.scala - test retry logic with 3 attempts, 5 second delays, success after retry, failure after exhausted retries
 
-- [ ] T024 Implement Retry utility in src/main/scala/com/etl/util/Retry.scala - withRetry function using tail recursion, Either[Throwable, A] return type, configurable maxAttempts and delaySeconds
+- [x] T024 Implement Retry utility in src/main/scala/com/etl/util/Retry.scala - withRetry function using tail recursion, Either[Throwable, A] return type, configurable maxAttempts and delaySeconds
 
-- [ ] T025 [P] Unit test for Logging utility in src/test/scala/unit/util/LoggingSpec.scala - test structured logging with MDC context (pipelineId, traceId), JSON log output format
+- [x] T025 [P] Unit test for Logging utility in src/test/scala/unit/util/LoggingSpec.scala - test structured logging with MDC context (pipelineId, traceId), JSON log output format
 
-- [ ] T026 [P] Implement Logging trait in src/main/scala/com/etl/util/Logging.scala - SLF4J wrapper with MDC support, helper methods for structured logging (logInfo, logError with context maps)
+- [x] T026 [P] Implement Logging trait in src/main/scala/com/etl/util/Logging.scala - SLF4J wrapper with MDC support, helper methods for structured logging (logInfo, logError with context maps)
 
 ---
 
