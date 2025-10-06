@@ -1,0 +1,60 @@
+{
+  "type": "record",
+  "name": "Transaction",
+  "namespace": "com.etl.schema",
+  "doc": "Schema for financial transactions from PostgreSQL/MySQL",
+  "fields": [
+    {
+      "name": "transaction_id",
+      "type": "string",
+      "doc": "Unique transaction identifier"
+    },
+    {
+      "name": "user_id",
+      "type": "string",
+      "doc": "User identifier (foreign key)"
+    },
+    {
+      "name": "amount",
+      "type": "double",
+      "doc": "Transaction amount (must be non-negative)"
+    },
+    {
+      "name": "currency",
+      "type": "string",
+      "doc": "ISO currency code (e.g., USD, EUR)"
+    },
+    {
+      "name": "transaction_time",
+      "type": "long",
+      "logicalType": "timestamp-millis",
+      "doc": "Transaction timestamp"
+    },
+    {
+      "name": "status",
+      "type": {
+        "type": "enum",
+        "name": "TransactionStatus",
+        "symbols": ["PENDING", "COMPLETED", "FAILED", "REFUNDED"]
+      },
+      "doc": "Transaction status"
+    },
+    {
+      "name": "metadata",
+      "type": [
+        "null",
+        {
+          "type": "record",
+          "name": "TransactionMetadata",
+          "fields": [
+            {"name": "ip_address", "type": ["null", "string"], "default": null},
+            {"name": "device_id", "type": ["null", "string"], "default": null},
+            {"name": "merchant_id", "type": ["null", "string"], "default": null}
+          ]
+        }
+      ],
+      "default": null,
+      "doc": "Optional transaction metadata"
+    }
+  ]
+}

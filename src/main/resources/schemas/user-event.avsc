@@ -1,0 +1,51 @@
+{
+  "type": "record",
+  "name": "UserEvent",
+  "namespace": "com.etl.schema",
+  "doc": "Schema for user interaction events from Kafka",
+  "fields": [
+    {
+      "name": "event_id",
+      "type": "string",
+      "doc": "Unique event identifier (UUID)"
+    },
+    {
+      "name": "user_id",
+      "type": "string",
+      "doc": "User identifier"
+    },
+    {
+      "name": "event_type",
+      "type": {
+        "type": "enum",
+        "name": "EventType",
+        "symbols": ["PAGE_VIEW", "BUTTON_CLICK", "FORM_SUBMIT", "API_CALL"]
+      },
+      "doc": "Type of user event"
+    },
+    {
+      "name": "timestamp",
+      "type": "long",
+      "logicalType": "timestamp-millis",
+      "doc": "Event timestamp in epoch milliseconds"
+    },
+    {
+      "name": "properties",
+      "type": [
+        "null",
+        {
+          "type": "map",
+          "values": "string"
+        }
+      ],
+      "default": null,
+      "doc": "Optional event properties"
+    },
+    {
+      "name": "amount",
+      "type": ["null", "double"],
+      "default": null,
+      "doc": "Optional transaction amount for monetary events"
+    }
+  ]
+}
