@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+  <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+      <includeContext>true</includeContext>
+      <includeMdc>true</includeMdc>
+      <includeCallerData>false</includeCallerData>
+      <fieldNames>
+        <timestamp>timestamp</timestamp>
+        <level>level</level>
+        <message>message</message>
+        <logger>logger</logger>
+        <thread>thread</thread>
+        <stackTrace>stackTrace</stackTrace>
+      </fieldNames>
+    </encoder>
+  </appender>
+
+  <!-- Suppress verbose Spark logging -->
+  <logger name="org.apache.spark" level="WARN"/>
+  <logger name="org.apache.hadoop" level="WARN"/>
+  <logger name="org.spark_project" level="WARN"/>
+
+  <!-- Application logging -->
+  <logger name="com.etl" level="INFO"/>
+
+  <root level="INFO">
+    <appender-ref ref="STDOUT"/>
+  </root>
+</configuration>
