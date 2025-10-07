@@ -107,14 +107,39 @@ case class LoadConfig(
 )
 
 /**
+ * Retry strategy type for error handling.
+ */
+sealed trait RetryStrategyType
+object RetryStrategyType {
+  case object ExponentialBackoff extends RetryStrategyType
+  case object FixedDelay extends RetryStrategyType
+  case object NoRetry extends RetryStrategyType
+
+  def fromString(s: String): RetryStrategyType = s.toLowerCase match {
+    case "exponential" | "exponentialbackoff" => ExponentialBackoff
+    case "fixed" | "fixeddelay"               => FixedDelay
+    case "none" | "noretry"                   => NoRetry
+    case _ => throw new IllegalArgumentException(s"Unknown retry strategy type: $s")
+  }
+}
+
+/**
  * Retry configuration for pipeline execution.
  *
+ * @param strategy Type of retry strategy (ExponentialBackoff, FixedDelay, NoRetry)
  * @param maxAttempts Maximum number of retry attempts (default: 3)
- * @param delaySeconds Delay between retry attempts in seconds (default: 5)
+ * @param initialDelaySeconds Initial delay between retry attempts in seconds (default: 5)
+ * @param maxDelaySeconds Maximum delay for exponential backoff in seconds (default: 60)
+ * @param backoffMultiplier Multiplier for exponential backoff (default: 2.0)
+ * @param jitter Whether to add random jitter to delays (default: true)
  */
 case class RetryConfig(
+  strategy: RetryStrategyType = RetryStrategyType.ExponentialBackoff,
   maxAttempts: Int = 3,
-  delaySeconds: Int = 5
+  initialDelaySeconds: Int = 5,
+  maxDelaySeconds: Int = 60,
+  backoffMultiplier: Double = 2.0,
+  jitter: Boolean = true
 )
 
 /**
@@ -126,6 +151,87 @@ case class RetryConfig(
 case class PerformanceConfig(
   shufflePartitions: Option[Int] = None,
   broadcastThreshold: Option[Long] = None
+)
+
+/**
+ * Circuit breaker configuration.
+ *
+ * @param enabled Whether circuit breaker is enabled (default: true)
+ * @param failureThreshold Number of failures before opening circuit (default: 5)
+ * @param resetTimeoutSeconds Time in seconds before attempting reset (default: 60)
+ * @param halfOpenMaxAttempts Max test attempts in half-open state (default: 1)
+ */
+case class CircuitBreakerConfig(
+  enabled: Boolean = true,
+  failureThreshold: Int = 5,
+  resetTimeoutSeconds: Int = 60,
+  halfOpenMaxAttempts: Int = 1
+)
+
+/**
+ * Dead letter queue type.
+ */
+sealed trait DLQType
+object DLQType {
+  case object Kafka extends DLQType
+  case object S3 extends DLQType
+  case object Logging extends DLQType
+  case object None extends DLQType
+
+  def fromString(s: String): DLQType = s.toLowerCase match {
+    case "kafka"   => Kafka
+    case "s3"      => S3
+    case "logging" => Logging
+    case "none"    => None
+    case _ => throw new IllegalArgumentException(s"Unknown DLQ type: $s")
+  }
+}
+
+/**
+ * Dead letter queue configuration.
+ *
+ * @param dlqType Type of DLQ implementation (Kafka, S3, Logging, None)
+ * @param bootstrapServers Kafka bootstrap servers (for Kafka DLQ)
+ * @param topic Kafka DLQ topic name (for Kafka DLQ)
+ * @param bucketPath S3 bucket path (for S3 DLQ, e.g., s3a://my-bucket/dlq/)
+ * @param partitionBy S3 partitioning strategy: date, hour, pipeline, stage (default: date)
+ * @param bufferSize Number of records to buffer before flushing (default: 100)
+ * @param format Output format for S3: parquet, json (default: parquet)
+ * @param producerConfig Additional Kafka producer configuration
+ */
+case class DLQConfig(
+  dlqType: DLQType = DLQType.None,
+  bootstrapServers: Option[String] = None,
+  topic: Option[String] = None,
+  bucketPath: Option[String] = None,
+  partitionBy: String = "date",
+  bufferSize: Int = 100,
+  format: String = "parquet",
+  producerConfig: Map[String, String] = Map.empty
+) {
+  // Validation
+  if (dlqType == DLQType.Kafka) {
+    require(bootstrapServers.isDefined, "bootstrapServers is required for Kafka DLQ")
+    require(topic.isDefined, "topic is required for Kafka DLQ")
+  }
+  if (dlqType == DLQType.S3) {
+    require(bucketPath.isDefined, "bucketPath is required for S3 DLQ")
+  }
+}
+
+/**
+ * Error handling configuration.
+ *
+ * @param retryConfig Retry strategy configuration
+ * @param circuitBreakerConfig Circuit breaker configuration
+ * @param dlqConfig Dead letter queue configuration
+ * @param failFast Whether to fail immediately on errors (default: false)
+ */
+case class ErrorHandlingConfig(
+  retryConfig: RetryConfig = RetryConfig(),
+  circuitBreakerConfig: CircuitBreakerConfig = CircuitBreakerConfig(),
+  dlqConfig: DLQConfig = DLQConfig(),
+  failFast: Boolean = false
 )
 
 /**
@@ -147,7 +253,7 @@ case class LoggingConfig(
  * @param extract Extraction configuration
  * @param transforms Ordered sequence of transformations
  * @param load Loading configuration
- * @param retryConfig Retry behavior settings
+ * @param errorHandlingConfig Error handling and recovery settings
  * @param performanceConfig Performance tuning parameters
  * @param loggingConfig Observability settings
  */
@@ -157,7 +263,11 @@ case class PipelineConfig(
   extract: ExtractConfig,
   transforms: Seq[TransformConfig] = Seq.empty,
   load: LoadConfig,
-  retryConfig: RetryConfig = RetryConfig(),
+  errorHandlingConfig: ErrorHandlingConfig = ErrorHandlingConfig(),
   performanceConfig: PerformanceConfig = PerformanceConfig(),
   loggingConfig: LoggingConfig = LoggingConfig()
-)
+) {
+  // Backward compatibility: expose retry config for existing code
+  @deprecated("Use errorHandlingConfig.retryConfig instead", "1.1.0")
+  def retryConfig: RetryConfig = errorHandlingConfig.retryConfig
+}
