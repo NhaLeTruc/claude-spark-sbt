@@ -1,0 +1,48 @@
+{
+  "pipelineId": "mysql-transactions-to-kafka",
+  "extract": {
+    "sourceType": "MySQL",
+    "query": "SELECT transaction_id, user_id, amount, currency, transaction_time, status FROM transactions WHERE transaction_time >= CURRENT_DATE - INTERVAL 1 DAY",
+    "schemaName": "transaction",
+    "credentialId": "mysql.password",
+    "connectionParams": {
+      "host": "mysql.example.com",
+      "port": "3306",
+      "database": "commerce",
+      "user": "readonly_user",
+      "useSSL": "true",
+      "serverTimezone": "UTC",
+      "fetchsize": "10000"
+    }
+  },
+  "transforms": [
+    {
+      "transformType": "Aggregation",
+      "parameters": {
+        "groupBy": "[\"user_id\", \"currency\"]",
+        "aggregations": "{\"amount\": \"sum,avg,count\", \"transaction_id\": \"count\"}"
+      }
+    }
+  ],
+  "load": {
+    "sinkType": "Kafka",
+    "topic": "transaction-summaries",
+    "writeMode": "Append",
+    "connectionParams": {
+      "kafka.bootstrap.servers": "kafka1.example.com:9092,kafka2.example.com:9092",
+      "topic": "transaction-summaries"
+    }
+  },
+  "retry": {
+    "maxAttempts": 3,
+    "delaySeconds": 5
+  },
+  "performance": {
+    "batchSize": 20000,
+    "parallelism": 8
+  },
+  "logging": {
+    "level": "INFO",
+    "structuredLogging": true
+  }
+}

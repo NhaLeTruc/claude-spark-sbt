@@ -1,0 +1,51 @@
+{
+  "pipelineId": "batch-s3-to-postgres",
+  "extract": {
+    "sourceType": "S3",
+    "path": "s3a://my-data-lake/raw/events/year=2024/month=01/",
+    "schemaName": "user-event",
+    "connectionParams": {
+      "format": "csv",
+      "header": "true",
+      "inferSchema": "false",
+      "fs.s3a.access.key": "YOUR_ACCESS_KEY",
+      "fs.s3a.secret.key": "YOUR_SECRET_KEY",
+      "fs.s3a.endpoint": "s3.us-west-2.amazonaws.com"
+    }
+  },
+  "transforms": [
+    {
+      "transformType": "Aggregation",
+      "parameters": {
+        "groupBy": "[\"user_id\"]",
+        "aggregations": "{\"amount\": \"sum\", \"event_id\": \"count\"}"
+      }
+    }
+  ],
+  "load": {
+    "sinkType": "PostgreSQL",
+    "table": "user_summary",
+    "writeMode": "Upsert",
+    "credentialId": "postgres.password",
+    "connectionParams": {
+      "host": "localhost",
+      "port": "5432",
+      "database": "analytics",
+      "user": "etl_user",
+      "primaryKey": "user_id",
+      "batchsize": "10000"
+    }
+  },
+  "retry": {
+    "maxAttempts": 3,
+    "delaySeconds": 5
+  },
+  "performance": {
+    "batchSize": 10000,
+    "parallelism": 8
+  },
+  "logging": {
+    "level": "INFO",
+    "structuredLogging": true
+  }
+}
