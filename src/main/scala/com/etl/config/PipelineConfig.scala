@@ -235,6 +235,70 @@ case class ErrorHandlingConfig(
 )
 
 /**
+ * Data quality rule type.
+ */
+sealed trait DataQualityRuleType
+object DataQualityRuleType {
+  case object NotNull extends DataQualityRuleType
+  case object Range extends DataQualityRuleType
+  case object Unique extends DataQualityRuleType
+
+  def fromString(s: String): DataQualityRuleType = s.toLowerCase match {
+    case "not_null" | "notnull" => NotNull
+    case "range"                => Range
+    case "unique"               => Unique
+    case _ => throw new IllegalArgumentException(s"Unknown data quality rule type: $s")
+  }
+}
+
+/**
+ * Data quality rule configuration.
+ *
+ * @param ruleType Type of rule (NotNull, Range, Unique)
+ * @param name Optional custom name for the rule
+ * @param columns Columns to validate
+ * @param severity Severity level: error, warning, info (default: error)
+ * @param parameters Rule-specific parameters (e.g., min/max for range)
+ */
+case class DataQualityRuleConfig(
+  ruleType: DataQualityRuleType,
+  name: Option[String] = None,
+  columns: Seq[String],
+  severity: String = "error",
+  parameters: Map[String, Any] = Map.empty
+) {
+  // Validation
+  require(columns.nonEmpty, "Data quality rule requires at least one column")
+  require(
+    Seq("error", "warning", "info").contains(severity.toLowerCase),
+    s"Invalid severity: $severity. Must be error, warning, or info"
+  )
+}
+
+/**
+ * Data quality validation configuration.
+ *
+ * @param enabled Whether data quality validation is enabled (default: false)
+ * @param rules List of data quality rules to execute
+ * @param onFailure Action on failure: abort, continue, warn (default: abort)
+ * @param validateAfterExtract Validate data after extraction (default: false)
+ * @param validateAfterTransform Validate data after transformation (default: true)
+ */
+case class DataQualityConfig(
+  enabled: Boolean = false,
+  rules: Seq[DataQualityRuleConfig] = Seq.empty,
+  onFailure: String = "abort",
+  validateAfterExtract: Boolean = false,
+  validateAfterTransform: Boolean = true
+) {
+  // Validation
+  require(
+    Seq("abort", "continue", "warn").contains(onFailure.toLowerCase),
+    s"Invalid onFailure: $onFailure. Must be abort, continue, or warn"
+  )
+}
+
+/**
  * Logging configuration.
  *
  * @param logLevel Logging level (INFO, DEBUG, WARN, ERROR)
@@ -254,6 +318,7 @@ case class LoggingConfig(
  * @param transforms Ordered sequence of transformations
  * @param load Loading configuration
  * @param errorHandlingConfig Error handling and recovery settings
+ * @param dataQualityConfig Data quality validation settings
  * @param performanceConfig Performance tuning parameters
  * @param loggingConfig Observability settings
  */
@@ -264,6 +329,7 @@ case class PipelineConfig(
   transforms: Seq[TransformConfig] = Seq.empty,
   load: LoadConfig,
   errorHandlingConfig: ErrorHandlingConfig = ErrorHandlingConfig(),
+  dataQualityConfig: DataQualityConfig = DataQualityConfig(),
   performanceConfig: PerformanceConfig = PerformanceConfig(),
   loggingConfig: LoggingConfig = LoggingConfig()
 ) {
