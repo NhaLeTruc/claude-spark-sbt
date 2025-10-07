@@ -48,7 +48,7 @@ case class ETLPipeline(
         // Stage 1: Extract
         val extractedDf = withMDC(context.getMDCContext ++ Map("stage" -> "extract")) {
           logger.info("Stage 1: Extracting data")
-          val df = extractor.extract(context.config.extract)(context.spark)
+          val df = extractor.extractWithVault(context.config.extract, context.vault)(context.spark)
           val recordCount = df.count()
 
           logger.info(

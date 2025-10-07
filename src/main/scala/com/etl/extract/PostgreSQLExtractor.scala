@@ -1,6 +1,7 @@
 package com.etl.extract
 
-import com.etl.config.ExtractConfig
+import com.etl.config.{CredentialVault, ExtractConfig}
+import com.etl.util.CredentialHelper
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.slf4j.LoggerFactory
 
@@ -12,7 +13,13 @@ import org.slf4j.LoggerFactory
  * - port (optional): PostgreSQL port (default: 5432)
  * - database (required): Database name
  * - user (required): Username
- * - password: Retrieved from credentialId if provided
+ * - password: Retrieved from credentialId via vault (preferred) or plain-text from config
+ *
+ * Credential Management:
+ * - Preferred: Set credentialId in ExtractConfig, store password in encrypted vault
+ * - Fallback: Set password in connectionParams (plain-text, not recommended)
+ *
+ * Performance parameters:
  * - fetchsize (optional): JDBC fetch size for performance
  * - numPartitions (optional): Number of partitions for parallel reads
  * - partitionColumn (optional): Column to partition on
@@ -24,7 +31,7 @@ import org.slf4j.LoggerFactory
 class PostgreSQLExtractor extends Extractor {
   private val logger = LoggerFactory.getLogger(getClass)
 
-  override def extract(config: ExtractConfig)(implicit spark: SparkSession): DataFrame = {
+  override def extractWithVault(config: ExtractConfig, vault: CredentialVault)(implicit spark: SparkSession): DataFrame = {
     logger.info(s"Extracting from PostgreSQL with config: ${config.connectionParams}")
 
     // Validate required parameters
@@ -67,22 +74,17 @@ class PostgreSQLExtractor extends Extractor {
     val jdbcUrl = s"jdbc:postgresql://$host:$port/$database"
     logger.info(s"Connecting to PostgreSQL: $jdbcUrl")
 
+    // Get password from vault (preferred) or config (fallback)
+    val password = CredentialHelper.getPasswordFromExtractConfig(config, vault)
+
     // Build JDBC reader
     var reader = spark.read
       .format("jdbc")
       .option("url", jdbcUrl)
       .option("dbtable", dbtable)
       .option("user", user)
+      .option("password", password)
       .option("driver", "org.postgresql.Driver")
-
-    // Add password from credential vault if credentialId provided
-    config.credentialId.foreach { credId =>
-      // In actual implementation, this would retrieve from CredentialVault
-      // For now, we'll look for it in connectionParams
-      config.connectionParams.get("password").foreach { pwd =>
-        reader = reader.option("password", pwd)
-      }
-    }
 
     // Apply optional performance parameters
     config.connectionParams.get("fetchsize").foreach { size =>
@@ -115,5 +117,32 @@ class PostgreSQLExtractor extends Extractor {
     )
 
     df
+  }
+
+  /**
+   * Legacy extract method for backward compatibility.
+   * Delegates to extractWithVault with InMemoryVault containing password from config.
+   */
+  override def extract(config: ExtractConfig)(implicit spark: SparkSession): DataFrame = {
+    logger.warn("Using legacy extract() without vault. Consider using extractWithVault() for secure credentials.")
+
+    // Create temporary vault with password from config
+    val tempVault = config.connectionParams.get("password") match {
+      case Some(pwd) =>
+        com.etl.config.InMemoryVault("temp.password" -> pwd)
+      case None =>
+        com.etl.config.InMemoryVault()
+    }
+
+    // Use credentialId if present, otherwise create temp one
+    val configWithCredId = config.credentialId match {
+      case Some(_) => config
+      case None if config.connectionParams.contains("password") =>
+        config.copy(credentialId = Some("temp.password"))
+      case None =>
+        config
+    }
+
+    extractWithVault(configWithCredId, tempVault)(spark)
   }
 }
