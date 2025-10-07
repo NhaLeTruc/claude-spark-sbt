@@ -1,0 +1,113 @@
+{
+  "pipelineId": "data-quality-demo",
+  "name": "Data Quality Validation Demo Pipeline",
+  "extract": {
+    "sourceType": "postgresql",
+    "connectionParams": {
+      "host": "localhost",
+      "port": "5432",
+      "database": "etldb",
+      "user": "etluser"
+    },
+    "query": "SELECT user_id, email, age, account_balance, created_at FROM users WHERE created_at >= CURRENT_DATE - INTERVAL '7 days'",
+    "schemaName": "user_schema"
+  },
+  "transforms": [
+    {
+      "transformType": "aggregation",
+      "parameters": {
+        "groupByColumns": ["age"],
+        "aggregations": {
+          "total_users": "count",
+          "avg_balance": "avg(account_balance)",
+          "total_balance": "sum(account_balance)"
+        }
+      }
+    }
+  ],
+  "load": {
+    "sinkType": "s3",
+    "connectionParams": {
+      "bucket": "my-etl-bucket",
+      "prefix": "user-analytics"
+    },
+    "path": "s3a://my-etl-bucket/user-analytics",
+    "writeMode": "append",
+    "schemaName": "user_analytics_schema"
+  },
+  "dataQualityConfig": {
+    "enabled": true,
+    "validateAfterExtract": true,
+    "validateAfterTransform": true,
+    "onFailure": "abort",
+    "rules": [
+      {
+        "ruleType": "not_null",
+        "name": "RequiredFieldsRule",
+        "columns": ["user_id", "email", "created_at"],
+        "severity": "error"
+      },
+      {
+        "ruleType": "range",
+        "name": "AgeValidationRule",
+        "columns": ["age"],
+        "severity": "error",
+        "parameters": {
+          "min": 0,
+          "max": 150
+        }
+      },
+      {
+        "ruleType": "range",
+        "name": "AccountBalanceRule",
+        "columns": ["account_balance"],
+        "severity": "warning",
+        "parameters": {
+          "min": 0.0,
+          "max": 10000000.0
+        }
+      },
+      {
+        "ruleType": "unique",
+        "name": "UniqueEmailRule",
+        "columns": ["email"],
+        "severity": "error"
+      },
+      {
+        "ruleType": "unique",
+        "name": "UniqueUserIdRule",
+        "columns": ["user_id"],
+        "severity": "error"
+      }
+    ]
+  },
+  "errorHandlingConfig": {
+    "retryConfig": {
+      "strategy": "exponential",
+      "maxAttempts": 3,
+      "initialDelaySeconds": 2,
+      "maxDelaySeconds": 30,
+      "backoffMultiplier": 2.0,
+      "jitter": true
+    },
+    "circuitBreakerConfig": {
+      "enabled": true,
+      "failureThreshold": 5,
+      "resetTimeoutSeconds": 60
+    },
+    "dlqConfig": {
+      "dlqType": "s3",
+      "bucketPath": "s3a://my-etl-bucket/dlq/",
+      "partitionBy": "date",
+      "bufferSize": 100,
+      "format": "parquet"
+    }
+  },
+  "performanceConfig": {
+    "shufflePartitions": 100
+  },
+  "loggingConfig": {
+    "logLevel": "INFO",
+    "includeMetrics": true
+  }
+}

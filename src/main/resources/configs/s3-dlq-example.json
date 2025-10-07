@@ -1,0 +1,66 @@
+{
+  "pipelineId": "s3-dlq-demo",
+  "name": "S3 Dead Letter Queue Demo Pipeline",
+  "extract": {
+    "sourceType": "kafka",
+    "connectionParams": {
+      "kafka.bootstrap.servers": "localhost:9092",
+      "subscribe": "user-events",
+      "startingOffsets": "latest"
+    },
+    "topic": "user-events",
+    "schemaName": "user_event_schema"
+  },
+  "transforms": [
+    {
+      "transformType": "windowing",
+      "parameters": {
+        "partitionColumns": ["user_id"],
+        "orderColumns": ["timestamp"],
+        "windowFunction": "row_number"
+      }
+    }
+  ],
+  "load": {
+    "sinkType": "s3",
+    "connectionParams": {
+      "bucket": "my-etl-bucket",
+      "prefix": "processed/user-events"
+    },
+    "path": "s3a://my-etl-bucket/processed/user-events",
+    "writeMode": "append",
+    "schemaName": "processed_event_schema"
+  },
+  "errorHandlingConfig": {
+    "retryConfig": {
+      "strategy": "exponential",
+      "maxAttempts": 3,
+      "initialDelaySeconds": 5,
+      "maxDelaySeconds": 120,
+      "backoffMultiplier": 3.0,
+      "jitter": true
+    },
+    "circuitBreakerConfig": {
+      "enabled": true,
+      "failureThreshold": 10,
+      "resetTimeoutSeconds": 120,
+      "halfOpenMaxAttempts": 2
+    },
+    "dlqConfig": {
+      "dlqType": "s3",
+      "bucketPath": "s3a://my-etl-bucket/dlq/",
+      "partitionBy": "date",
+      "bufferSize": 500,
+      "format": "parquet",
+      "producerConfig": {}
+    },
+    "failFast": false
+  },
+  "performanceConfig": {
+    "shufflePartitions": 100
+  },
+  "loggingConfig": {
+    "logLevel": "DEBUG",
+    "includeMetrics": true
+  }
+}

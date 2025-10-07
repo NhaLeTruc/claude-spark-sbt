@@ -2,8 +2,11 @@ package com.etl.load
 
 import com.etl.config.LoadConfig
 import com.etl.model.{LoadResult, WriteMode}
+import com.etl.util.{DeadLetterQueue, ErrorHandlingContext, NoOpDeadLetterQueue}
 import org.apache.spark.sql.DataFrame
+import org.apache.spark.sql.streaming.StreamingQuery
 import org.slf4j.LoggerFactory
+import scala.util.{Failure, Success, Try}
 
 /**
  * Kafka loader for writing to Kafka topics.
@@ -17,9 +20,18 @@ import org.slf4j.LoggerFactory
  *
  * Note: Kafka only supports Append mode. Overwrite and Upsert are not supported.
  * DataFrame must contain 'key' and 'value' columns.
+ * Integrates with error handling components for retries, circuit breaker, and DLQ.
  */
-class KafkaLoader extends Loader {
+class KafkaLoader(
+  errorHandlingContext: Option[ErrorHandlingContext] = None
+) extends Loader {
   private val logger = LoggerFactory.getLogger(getClass)
+  private val dlq: DeadLetterQueue = errorHandlingContext
+    .map(_.deadLetterQueue)
+    .getOrElse(new NoOpDeadLetterQueue())
+
+  // Track streaming queries for proper lifecycle management
+  private val activeQueries = scala.collection.mutable.Map[String, StreamingQuery]()
 
   override def load(df: DataFrame, config: LoadConfig, mode: WriteMode): LoadResult = {
     logger.info(s"Loading to Kafka with config: ${config.connectionParams}, mode: $mode")
@@ -61,70 +73,167 @@ class KafkaLoader extends Loader {
 
     logger.info(s"Writing to Kafka: topic=$topic, bootstrap.servers=$bootstrapServers")
 
-    try {
-      if (df.isStreaming) {
-        // Streaming write
-        val checkpointLocation = config.connectionParams.getOrElse(
-          "checkpointLocation",
-          throw new IllegalArgumentException(
-            "checkpointLocation is required for streaming Kafka writes"
-          )
+    if (df.isStreaming) {
+      // Streaming write - handled differently due to async nature
+      handleStreamingWrite(df, bootstrapServers, topic, config)
+    } else {
+      // Batch write with error handling
+      handleBatchWrite(df, bootstrapServers, topic, config)
+    }
+  }
+
+  private def handleBatchWrite(
+    df: DataFrame,
+    bootstrapServers: String,
+    topic: String,
+    config: LoadConfig
+  ): LoadResult = {
+    logger.info(s"Starting batch write to Kafka")
+
+    val recordCount = df.count()
+
+    val result = errorHandlingContext match {
+      case Some(ctx) =>
+        ctx.execute {
+          executeBatchWrite(df, bootstrapServers, topic, config)
+        }
+      case None =>
+        Try(executeBatchWrite(df, bootstrapServers, topic, config)).toEither
+    }
+
+    result match {
+      case Right(_) =>
+        logger.info(s"Successfully wrote $recordCount records to Kafka topic: $topic")
+        LoadResult.success(recordCount)
+
+      case Left(error) =>
+        val errorMsg = s"Failed to write to Kafka topic $topic after retries: ${error.getMessage}"
+        logger.error(errorMsg, error)
+
+        // Publish failed records to DLQ
+        val context = Map(
+          "pipelineId" -> config.sinkType.toString,
+          "stage" -> "load",
+          "topic" -> topic,
+          "mode" -> "batch"
         )
 
-        logger.info(s"Starting streaming write to Kafka with checkpoint: $checkpointLocation")
-
-        var writer = df.writeStream
-          .format("kafka")
-          .option("kafka.bootstrap.servers", bootstrapServers)
-          .option("topic", topic)
-          .option("checkpointLocation", checkpointLocation)
-
-        // Apply additional Kafka options
-        config.connectionParams.foreach {
-          case (key, value) if key.startsWith("kafka.") && key != "kafka.bootstrap.servers" =>
-            writer = writer.option(key, value)
-          case _ => // Skip non-kafka parameters
+        Try {
+          df.collect().foreach { row =>
+            dlq.publish(row, error, context)
+          }
+        } match {
+          case Success(_) =>
+            logger.info(s"Published $recordCount failed records to DLQ")
+          case Failure(dlqError) =>
+            logger.error(s"Failed to publish to DLQ: ${dlqError.getMessage}", dlqError)
         }
 
-        // Start streaming query
-        val query = writer.start()
+        LoadResult.failure(0L, recordCount, errorMsg)
+    }
+  }
 
-        logger.info(s"Streaming query started for topic: $topic")
+  private def executeBatchWrite(
+    df: DataFrame,
+    bootstrapServers: String,
+    topic: String,
+    config: LoadConfig
+  ): Unit = {
+    var writer = df.write
+      .format("kafka")
+      .option("kafka.bootstrap.servers", bootstrapServers)
+      .option("topic", topic)
 
-        // Note: For streaming, we return success immediately
-        // Actual records loaded would be monitored via query metrics
-        LoadResult.success(0L) // Streaming - count not available immediately
+    // Apply additional Kafka options
+    config.connectionParams.foreach {
+      case (key, value) if key.startsWith("kafka.") && key != "kafka.bootstrap.servers" =>
+        writer = writer.option(key, value)
+      case _ => // Skip non-kafka parameters
+    }
 
-      } else {
-        // Batch write
-        logger.info(s"Starting batch write to Kafka")
+    // Execute write
+    writer.save()
+  }
 
-        val recordCount = df.count()
+  private def handleStreamingWrite(
+    df: DataFrame,
+    bootstrapServers: String,
+    topic: String,
+    config: LoadConfig
+  ): LoadResult = {
+    val checkpointLocation = config.connectionParams.getOrElse(
+      "checkpointLocation",
+      throw new IllegalArgumentException(
+        "checkpointLocation is required for streaming Kafka writes"
+      )
+    )
 
-        var writer = df.write
-          .format("kafka")
-          .option("kafka.bootstrap.servers", bootstrapServers)
-          .option("topic", topic)
+    logger.info(s"Starting streaming write to Kafka with checkpoint: $checkpointLocation")
 
-        // Apply additional Kafka options
-        config.connectionParams.foreach {
-          case (key, value) if key.startsWith("kafka.") && key != "kafka.bootstrap.servers" =>
-            writer = writer.option(key, value)
-          case _ => // Skip non-kafka parameters
-        }
+    try {
+      var writer = df.writeStream
+        .format("kafka")
+        .option("kafka.bootstrap.servers", bootstrapServers)
+        .option("topic", topic)
+        .option("checkpointLocation", checkpointLocation)
 
-        // Execute write
-        writer.save()
-
-        logger.info(s"Successfully wrote $recordCount records to Kafka topic: $topic")
-
-        LoadResult.success(recordCount)
+      // Apply additional Kafka options
+      config.connectionParams.foreach {
+        case (key, value) if key.startsWith("kafka.") && key != "kafka.bootstrap.servers" =>
+          writer = writer.option(key, value)
+        case _ => // Skip non-kafka parameters
       }
+
+      // Start streaming query
+      val query = writer.start()
+
+      // Store query reference for lifecycle management
+      val queryId = s"${topic}_${System.currentTimeMillis()}"
+      activeQueries.put(queryId, query)
+
+      logger.info(s"Streaming query started for topic: $topic (queryId: $queryId)")
+
+      // Note: For streaming, we return success immediately
+      // Actual records loaded would be monitored via query metrics
+      LoadResult.success(0L) // Streaming - count not available immediately
+
     } catch {
       case e: Exception =>
-        val errorMsg = s"Failed to write to Kafka topic $topic: ${e.getMessage}"
+        val errorMsg = s"Failed to start streaming write to Kafka topic $topic: ${e.getMessage}"
         logger.error(errorMsg, e)
-        LoadResult.failure(0L, df.count(), errorMsg)
+        LoadResult.failure(0L, 0L, errorMsg)
     }
+  }
+
+  /**
+   * Get all active streaming queries managed by this loader.
+   */
+  def getActiveQueries: Map[String, StreamingQuery] = activeQueries.toMap
+
+  /**
+   * Stop a specific streaming query by ID.
+   */
+  def stopQuery(queryId: String): Unit = {
+    activeQueries.get(queryId).foreach { query =>
+      logger.info(s"Stopping streaming query: $queryId")
+      query.stop()
+      activeQueries.remove(queryId)
+    }
+  }
+
+  /**
+   * Stop all active streaming queries.
+   */
+  def stopAllQueries(): Unit = {
+    logger.info(s"Stopping ${activeQueries.size} active streaming queries")
+    activeQueries.foreach { case (queryId, query) =>
+      Try(query.stop()) match {
+        case Success(_) =>
+          logger.info(s"Successfully stopped query: $queryId")
+        case Failure(e) =>
+          logger.error(s"Failed to stop query $queryId: ${e.getMessage}", e)
+      }
+    }
+    activeQueries.clear()
   }
 }

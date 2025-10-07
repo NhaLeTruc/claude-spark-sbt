@@ -13,7 +13,8 @@ This framework enables data engineers to compose, test, and deploy data pipeline
 - **Transformations**: Aggregations, Joins, Windowing (functional programming paradigm)
 - **Execution Models**: Batch (Spark) and Streaming (Spark Streaming)
 - **Data Format**: Avro serialization with JSON schema validation
-- **Fault Tolerance**: Automatic retry logic (configurable attempts and delays)
+- **Error Handling**: Advanced retry strategies, circuit breaker, dead letter queue (Kafka/S3)
+- **Fault Tolerance**: Exponential backoff with jitter, automatic recovery, failed record tracking
 
 ## Design Principles
 
@@ -92,7 +93,16 @@ claude-spark-sbt/
 │   │   │   ├── schema/            # SchemaRegistry, SchemaValidator
 │   │   │   ├── config/            # ConfigLoader, CredentialVault, PipelineConfig
 │   │   │   ├── model/             # ADTs and case classes
-│   │   │   └── util/              # Retry, Logging utilities
+│   │   │   └── util/              # Error handling, retry strategies, circuit breaker, DLQ
+│   │   │       ├── RetryStrategy.scala       # Exponential backoff with jitter
+│   │   │       ├── CircuitBreaker.scala      # 3-state circuit breaker
+│   │   │       ├── DeadLetterQueue.scala     # DLQ trait
+│   │   │       ├── KafkaDeadLetterQueue.scala # Kafka-based DLQ
+│   │   │       ├── S3DeadLetterQueue.scala    # S3-based DLQ with partitioning
+│   │   │       ├── ErrorHandlingFactory.scala # Factory for error handling components
+│   │   │       ├── GracefulShutdown.scala     # Signal handling
+│   │   │       ├── HealthCheck.scala          # HTTP health endpoints
+│   │   │       └── Logging.scala              # Structured logging
 │   │   └── resources/
 │   │       ├── schemas/           # Avro schemas (.avsc): user-event, transaction, user-summary
 │   │       ├── configs/           # Example pipeline configurations (JSON)
@@ -208,9 +218,25 @@ Pipelines are configured via JSON files. See [src/main/resources/configs/README.
     },
     "credentialId": "postgres.password"
   },
-  "retry": {
-    "maxAttempts": 3,
-    "delaySeconds": 5
+  "errorHandlingConfig": {
+    "retryConfig": {
+      "strategy": "exponential",
+      "maxAttempts": 5,
+      "initialDelaySeconds": 2,
+      "maxDelaySeconds": 60,
+      "backoffMultiplier": 2.0,
+      "jitter": true
+    },
+    "circuitBreakerConfig": {
+      "enabled": true,
+      "failureThreshold": 5,
+      "resetTimeoutSeconds": 60
+    },
+    "dlqConfig": {
+      "dlqType": "kafka",
+      "bootstrapServers": "localhost:9092",
+      "topic": "etl-dlq"
+    }
   },
   "performance": {
     "batchSize": 10000,
@@ -361,12 +387,93 @@ trait Loader {
 └─────────────┘
 ```
 
-### Error Handling & Retry
+### Error Handling & Recovery
 
-- **Retry Logic**: Automatic retry with configurable attempts and exponential backoff
-- **Error Propagation**: `Either[Throwable, Result]` for composable error handling
-- **Metrics Tracking**: Failed record counts, error messages, retry attempts
-- **Circuit Breaking**: Pipeline halts on validation failures
+Production-grade error handling with automatic recovery:
+
+#### Retry Strategies
+- **Exponential Backoff**: Increases delay exponentially with optional jitter to prevent thundering herd
+- **Fixed Delay**: Simple retry with consistent delays
+- **No Retry**: Fail-fast for non-transient errors
+
+```json
+{
+  "errorHandlingConfig": {
+    "retryConfig": {
+      "strategy": "exponential",
+      "maxAttempts": 5,
+      "initialDelaySeconds": 2,
+      "maxDelaySeconds": 60,
+      "backoffMultiplier": 2.0,
+      "jitter": true
+    }
+  }
+}
+```
+
+#### Circuit Breaker
+Protects against cascading failures with 3-state pattern (Closed/Open/HalfOpen):
+
+```json
+{
+  "circuitBreakerConfig": {
+    "enabled": true,
+    "failureThreshold": 5,
+    "resetTimeoutSeconds": 60,
+    "halfOpenMaxAttempts": 1
+  }
+}
+```
+
+**States:**
+- **Closed**: Normal operation, requests pass through
+- **Open**: Circuit breaker triggered, requests fail immediately
+- **HalfOpen**: Testing recovery, limited requests allowed
+
+#### Dead Letter Queue (DLQ)
+Failed records stored with comprehensive metadata for analysis and reprocessing:
+
+**Kafka DLQ:**
+```json
+{
+  "dlqConfig": {
+    "dlqType": "kafka",
+    "bootstrapServers": "localhost:9092",
+    "topic": "etl-dlq"
+  }
+}
+```
+
+**S3 DLQ with Partitioning:**
+```json
+{
+  "dlqConfig": {
+    "dlqType": "s3",
+    "bucketPath": "s3a://my-bucket/dlq/",
+    "partitionBy": "date",
+    "bufferSize": 500,
+    "format": "parquet"
+  }
+}
+```
+
+**DLQ Record Format:**
+```json
+{
+  "timestamp": 1696896000000,
+  "pipelineId": "user-pipeline",
+  "stage": "load",
+  "errorType": "SQLException",
+  "errorMessage": "Connection refused",
+  "stackTrace": "...",
+  "originalRecord": "{\"id\": 123}",
+  "originalSchema": "struct<id:int>",
+  "attemptNumber": 5,
+  "context": {"table": "users", "mode": "upsert"}
+}
+```
+
+For detailed documentation, see [ERROR_HANDLING.md](ERROR_HANDLING.md)
 
 ### Metrics & Observability
 

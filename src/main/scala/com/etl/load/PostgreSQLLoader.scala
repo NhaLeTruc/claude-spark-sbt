@@ -2,8 +2,11 @@ package com.etl.load
 
 import com.etl.config.LoadConfig
 import com.etl.model.{LoadResult, WriteMode}
-import org.apache.spark.sql.{DataFrame, SaveMode}
+import com.etl.util.{DeadLetterQueue, ErrorHandlingContext, NoOpDeadLetterQueue}
+import org.apache.spark.sql.{DataFrame, Row, SaveMode}
 import org.slf4j.LoggerFactory
+import java.sql.{Connection, DriverManager}
+import scala.util.{Failure, Success, Try}
 
 /**
  * PostgreSQL loader using JDBC.
@@ -20,9 +23,15 @@ import org.slf4j.LoggerFactory
  * - primaryKey (optional): Primary key column(s) for Upsert mode (comma-separated)
  *
  * Supports Append, Overwrite, and Upsert modes.
+ * Integrates with error handling components for retries, circuit breaker, and DLQ.
  */
-class PostgreSQLLoader extends Loader {
+class PostgreSQLLoader(
+  errorHandlingContext: Option[ErrorHandlingContext] = None
+) extends Loader {
   private val logger = LoggerFactory.getLogger(getClass)
+  private val dlq: DeadLetterQueue = errorHandlingContext
+    .map(_.deadLetterQueue)
+    .getOrElse(new NoOpDeadLetterQueue())
 
   override def load(df: DataFrame, config: LoadConfig, mode: WriteMode): LoadResult = {
     logger.info(s"Loading to PostgreSQL with config: ${config.connectionParams}, mode: $mode")
@@ -57,29 +66,68 @@ class PostgreSQLLoader extends Loader {
     val jdbcUrl = s"jdbc:postgresql://$host:$port/$database"
     logger.info(s"Writing to PostgreSQL: $jdbcUrl, table: $table")
 
-    try {
-      val recordCount = df.count()
+    val recordCount = df.count()
 
-      mode match {
-        case WriteMode.Append =>
-          writeJdbc(df, jdbcUrl, table, user, config, SaveMode.Append)
+    // Execute with error handling if configured
+    val result = errorHandlingContext match {
+      case Some(ctx) =>
+        ctx.execute {
+          executeLoad(df, jdbcUrl, table, user, config, mode)
+        }
+      case None =>
+        Try(executeLoad(df, jdbcUrl, table, user, config, mode)).toEither
+    }
 
-        case WriteMode.Overwrite =>
-          writeJdbc(df, jdbcUrl, table, user, config, SaveMode.Overwrite)
+    result match {
+      case Right(_) =>
+        logger.info(s"Successfully wrote $recordCount records to PostgreSQL table: $table")
+        LoadResult.success(recordCount)
 
-        case WriteMode.Upsert =>
-          // Upsert requires custom logic with temp table
-          performUpsert(df, jdbcUrl, table, user, config)
-      }
+      case Left(error) =>
+        val errorMsg = s"Failed to write to PostgreSQL table $table after retries: ${error.getMessage}"
+        logger.error(errorMsg, error)
 
-      logger.info(s"Successfully wrote $recordCount records to PostgreSQL table: $table")
-      LoadResult.success(recordCount)
+        // Publish failed records to DLQ
+        val context = Map(
+          "pipelineId" -> config.sinkType.toString,
+          "stage" -> "load",
+          "table" -> table,
+          "mode" -> mode.toString
+        )
 
-    } catch {
-      case e: Exception =>
-        val errorMsg = s"Failed to write to PostgreSQL table $table: ${e.getMessage}"
-        logger.error(errorMsg, e)
-        LoadResult.failure(0L, df.count(), errorMsg)
+        Try {
+          df.collect().foreach { row =>
+            dlq.publish(row, error, context)
+          }
+        } match {
+          case Success(_) =>
+            logger.info(s"Published $recordCount failed records to DLQ")
+          case Failure(dlqError) =>
+            logger.error(s"Failed to publish to DLQ: ${dlqError.getMessage}", dlqError)
+        }
+
+        LoadResult.failure(0L, recordCount, errorMsg)
+    }
+  }
+
+  private def executeLoad(
+    df: DataFrame,
+    jdbcUrl: String,
+    table: String,
+    user: String,
+    config: LoadConfig,
+    mode: WriteMode
+  ): Unit = {
+    mode match {
+      case WriteMode.Append =>
+        writeJdbc(df, jdbcUrl, table, user, config, SaveMode.Append)
+
+      case WriteMode.Overwrite =>
+        writeJdbc(df, jdbcUrl, table, user, config, SaveMode.Overwrite)
+
+      case WriteMode.Upsert =>
+        // Upsert requires custom logic with temp table
+        performUpsert(df, jdbcUrl, table, user, config)
     }
   }
 
@@ -146,33 +194,78 @@ class PostgreSQLLoader extends Loader {
 
     val tempTable = s"${table}_temp_${System.currentTimeMillis()}"
 
-    // Write to temp table
-    writeJdbc(df, jdbcUrl, tempTable, user, config, SaveMode.Overwrite)
+    var connection: Connection = null
+    try {
+      // Write to temp table
+      writeJdbc(df, jdbcUrl, tempTable, user, config, SaveMode.Overwrite)
 
-    // Build UPSERT query
-    val columns = df.schema.fieldNames
-    val setClause = columns.filter(c => !pkColumns.contains(c))
-      .map(c => s"$c = EXCLUDED.$c")
-      .mkString(", ")
+      // Get password for connection
+      val password = config.connectionParams.get("password").getOrElse("")
 
-    val conflictColumns = pkColumns.mkString(", ")
+      // Establish JDBC connection
+      connection = DriverManager.getConnection(jdbcUrl, user, password)
+      connection.setAutoCommit(false)
 
-    val upsertSql = s"""
-      INSERT INTO $table (${columns.mkString(", ")})
-      SELECT ${columns.mkString(", ")} FROM $tempTable
-      ON CONFLICT ($conflictColumns)
-      DO UPDATE SET $setClause
-    """.trim
+      // Build UPSERT query
+      val columns = df.schema.fieldNames
+      val setClause = columns.filter(c => !pkColumns.contains(c))
+        .map(c => s"\"$c\" = EXCLUDED.\"$c\"")
+        .mkString(", ")
 
-    logger.info(s"Executing upsert SQL: $upsertSql")
+      val conflictColumns = pkColumns.map(c => s"\"$c\"").mkString(", ")
+      val columnList = columns.map(c => s"\"$c\"").mkString(", ")
 
-    // Execute upsert via JDBC connection
-    // Note: In production, this would use proper JDBC connection management
-    // For now, we log the intent
-    logger.warn("Upsert requires direct JDBC connection - implementation placeholder")
+      val upsertSql = s"""
+        INSERT INTO "$table" ($columnList)
+        SELECT $columnList FROM "$tempTable"
+        ON CONFLICT ($conflictColumns)
+        DO UPDATE SET $setClause
+      """.trim
 
-    // Drop temp table
-    val dropSql = s"DROP TABLE IF EXISTS $tempTable"
-    logger.info(s"Cleaning up: $dropSql")
+      logger.info(s"Executing upsert SQL: $upsertSql")
+
+      // Execute upsert
+      val statement = connection.createStatement()
+      try {
+        val rowsAffected = statement.executeUpdate(upsertSql)
+        logger.info(s"Upsert affected $rowsAffected rows")
+      } finally {
+        statement.close()
+      }
+
+      // Drop temp table
+      val dropSql = s"DROP TABLE IF EXISTS \"$tempTable\""
+      logger.info(s"Cleaning up: $dropSql")
+
+      val dropStatement = connection.createStatement()
+      try {
+        dropStatement.execute(dropSql)
+      } finally {
+        dropStatement.close()
+      }
+
+      // Commit transaction
+      connection.commit()
+      logger.info("Upsert transaction committed successfully")
+
+    } catch {
+      case e: Exception =>
+        if (connection != null) {
+          Try(connection.rollback()) match {
+            case Success(_) => logger.info("Transaction rolled back due to error")
+            case Failure(rollbackError) =>
+              logger.error(s"Failed to rollback transaction: ${rollbackError.getMessage}")
+          }
+        }
+        throw e
+    } finally {
+      if (connection != null) {
+        Try(connection.close()) match {
+          case Failure(closeError) =>
+            logger.error(s"Failed to close JDBC connection: ${closeError.getMessage}")
+          case _ => // Successfully closed
+        }
+      }
+    }
   }
 }

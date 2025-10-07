@@ -3,8 +3,10 @@ package com.etl.core
 import com.etl.extract.Extractor
 import com.etl.load.Loader
 import com.etl.model.{PipelineFailure, PipelineResult, PipelineSuccess}
+import com.etl.quality.{DataQualityRuleFactory, DataQualityValidator, OnFailureAction}
 import com.etl.transform.Transformer
 import com.etl.util.Logging
+import org.apache.spark.sql.DataFrame
 import org.slf4j.LoggerFactory
 
 /**
@@ -62,6 +64,15 @@ case class ETLPipeline(
           df
         }
 
+        // Data Quality: Validate after extraction (if configured)
+        if (context.config.dataQualityConfig.enabled &&
+            context.config.dataQualityConfig.validateAfterExtract) {
+          withMDC(context.getMDCContext ++ Map("stage" -> "data-quality-extract")) {
+            logger.info("Running data quality validation after extraction")
+            runDataQualityValidation(extractedDf, context, "extract")
+          }
+        }
+
         // Stage 2: Transform (chain all transformers)
         val transformedDf = if (transformers.isEmpty) {
           logger.info("Stage 2: No transformers configured, skipping transformation")
@@ -105,6 +116,15 @@ case class ETLPipeline(
         if (transformers.isEmpty) {
           val updatedMetrics = context.metrics.copy(recordsTransformed = context.metrics.recordsExtracted)
           context.updateMetrics(updatedMetrics)
+        }
+
+        // Data Quality: Validate after transformation (if configured)
+        if (context.config.dataQualityConfig.enabled &&
+            context.config.dataQualityConfig.validateAfterTransform) {
+          withMDC(context.getMDCContext ++ Map("stage" -> "data-quality-transform")) {
+            logger.info("Running data quality validation after transformation")
+            runDataQualityValidation(transformedDf, context, "transform")
+          }
         }
 
         // Stage 3: Load
@@ -163,6 +183,53 @@ case class ETLPipeline(
 
           PipelineFailure(failedMetrics, e)
       }
+    }
+  }
+
+  /**
+   * Run data quality validation on a DataFrame.
+   *
+   * @param df DataFrame to validate
+   * @param context Execution context
+   * @param stage Stage name for logging (extract, transform)
+   */
+  private def runDataQualityValidation(
+    df: DataFrame,
+    context: ExecutionContext,
+    stage: String
+  ): Unit = {
+    try {
+      val config = context.config.dataQualityConfig
+
+      // Create rules from configuration
+      val rules = DataQualityRuleFactory.createRules(config.rules)
+
+      if (rules.isEmpty) {
+        logger.info(s"No data quality rules configured for $stage stage, skipping validation")
+        return
+      }
+
+      logger.info(s"Executing ${rules.size} data quality rule(s) for $stage stage")
+
+      // Determine onFailure action
+      val onFailure = OnFailureAction.fromString(config.onFailure)
+
+      // Execute validation
+      val report = DataQualityValidator.validate(df, rules, onFailure)
+
+      // Log report
+      logger.info(s"Data quality validation completed for $stage stage: ${report.summary}")
+
+      // Log failed rules
+      report.failures.foreach { result =>
+        logger.warn(s"Failed rule: ${result.summaryMessage}")
+      }
+
+    } catch {
+      case ex: Exception =>
+        logger.error(s"Data quality validation failed for $stage stage: ${ex.getMessage}", ex)
+        // Re-throw to fail the pipeline
+        throw ex
     }
   }
 }

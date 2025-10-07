@@ -1,0 +1,74 @@
+{
+  "pipelineId": "error-handling-demo",
+  "name": "Error Handling Demo Pipeline",
+  "extract": {
+    "sourceType": "postgresql",
+    "connectionParams": {
+      "host": "localhost",
+      "port": "5432",
+      "database": "etldb",
+      "user": "etluser"
+    },
+    "query": "SELECT * FROM users WHERE created_at >= CURRENT_DATE",
+    "schemaName": "user_schema"
+  },
+  "transforms": [
+    {
+      "transformType": "aggregation",
+      "parameters": {
+        "groupByColumns": ["country", "status"],
+        "aggregations": {
+          "total_users": "count",
+          "avg_age": "avg(age)"
+        }
+      }
+    }
+  ],
+  "load": {
+    "sinkType": "postgresql",
+    "connectionParams": {
+      "host": "localhost",
+      "port": "5432",
+      "database": "etldb",
+      "user": "etluser",
+      "table": "user_summary",
+      "primaryKey": "country,status"
+    },
+    "writeMode": "upsert",
+    "schemaName": "user_summary_schema"
+  },
+  "errorHandlingConfig": {
+    "retryConfig": {
+      "strategy": "exponential",
+      "maxAttempts": 5,
+      "initialDelaySeconds": 2,
+      "maxDelaySeconds": 60,
+      "backoffMultiplier": 2.0,
+      "jitter": true
+    },
+    "circuitBreakerConfig": {
+      "enabled": true,
+      "failureThreshold": 5,
+      "resetTimeoutSeconds": 60,
+      "halfOpenMaxAttempts": 1
+    },
+    "dlqConfig": {
+      "dlqType": "kafka",
+      "bootstrapServers": "localhost:9092",
+      "topic": "etl-dlq",
+      "producerConfig": {
+        "compression.type": "gzip",
+        "max.in.flight.requests.per.connection": "1"
+      }
+    },
+    "failFast": false
+  },
+  "performanceConfig": {
+    "shufflePartitions": 200,
+    "broadcastThreshold": 10485760
+  },
+  "loggingConfig": {
+    "logLevel": "INFO",
+    "includeMetrics": true
+  }
+}
