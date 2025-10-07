@@ -1,0 +1,51 @@
+{
+  "pipelineId": "streaming-kafka-to-s3",
+  "extract": {
+    "sourceType": "Kafka",
+    "topic": "user-events",
+    "schemaName": "user-event",
+    "connectionParams": {
+      "kafka.bootstrap.servers": "localhost:9092",
+      "subscribe": "user-events",
+      "startingOffsets": "latest",
+      "maxOffsetsPerTrigger": "10000"
+    }
+  },
+  "transforms": [
+    {
+      "transformType": "Window",
+      "parameters": {
+        "partitionBy": "[\"user_id\"]",
+        "orderBy": "[\"timestamp\"]",
+        "windowFunction": "row_number",
+        "outputColumn": "event_sequence"
+      }
+    }
+  ],
+  "load": {
+    "sinkType": "S3",
+    "path": "s3a://my-data-lake/processed/user-events/",
+    "writeMode": "Append",
+    "connectionParams": {
+      "format": "parquet",
+      "compression": "snappy",
+      "partitionBy": "[\"date\"]",
+      "checkpointLocation": "s3a://my-data-lake/checkpoints/user-events/",
+      "fs.s3a.access.key": "YOUR_ACCESS_KEY",
+      "fs.s3a.secret.key": "YOUR_SECRET_KEY",
+      "fs.s3a.endpoint": "s3.us-west-2.amazonaws.com"
+    }
+  },
+  "retry": {
+    "maxAttempts": 3,
+    "delaySeconds": 5
+  },
+  "performance": {
+    "batchSize": 50000,
+    "parallelism": 16
+  },
+  "logging": {
+    "level": "INFO",
+    "structuredLogging": true
+  }
+}
