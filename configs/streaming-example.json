@@ -1,0 +1,121 @@
+{
+  "pipelineId": "streaming-kafka-to-postgres",
+  "name": "Streaming User Events Pipeline",
+  "mode": "streaming",
+
+  "extract": {
+    "sourceType": "kafka",
+    "topic": "user-events",
+    "schemaName": "user-event",
+    "connectionParams": {
+      "kafka.bootstrap.servers": "localhost:9092",
+      "subscribe": "user-events",
+      "startingOffsets": "latest",
+      "maxOffsetsPerTrigger": "10000"
+    }
+  },
+
+  "transforms": [
+    {
+      "transformType": "aggregation",
+      "parameters": {
+        "groupByColumns": "user_id",
+        "windowColumn": "event_time",
+        "windowDuration": "10 minutes",
+        "slideDuration": "5 minutes",
+        "aggregations": "event_count:count,total_value:sum"
+      }
+    }
+  ],
+
+  "load": {
+    "sinkType": "postgresql",
+    "table": "user_event_aggregations",
+    "schemaName": "user-summary",
+    "writeMode": "append",
+    "connectionParams": {
+      "host": "localhost",
+      "port": "5432",
+      "database": "analytics",
+      "user": "etl_user",
+      "password": "changeme",
+      "table": "user_event_aggregations",
+      "batchsize": "1000"
+    }
+  },
+
+  "streamingConfigJson": {
+    "checkpointLocation": "/tmp/checkpoints/streaming-kafka-to-postgres",
+    "queryName": "user-events-aggregation",
+    "outputMode": "append",
+    "triggerMode": "processingtime=5 seconds",
+    "enableIdempotence": true,
+    "watermark": {
+      "eventTimeColumn": "event_time",
+      "delayThreshold": "10 minutes"
+    },
+    "lateDataConfig": {
+      "strategy": "sendtodlq",
+      "dlqTopic": "late-user-events"
+    }
+  },
+
+  "errorHandlingConfig": {
+    "retryConfig": {
+      "strategy": "exponential",
+      "maxAttempts": 3,
+      "initialDelaySeconds": 5,
+      "maxDelaySeconds": 60,
+      "backoffMultiplier": 2.0,
+      "jitter": true
+    },
+    "circuitBreakerConfig": {
+      "enabled": true,
+      "failureThreshold": 5,
+      "resetTimeoutSeconds": 60,
+      "halfOpenMaxAttempts": 1
+    },
+    "dlqConfig": {
+      "dlqType": "kafka",
+      "bootstrapServers": "localhost:9092",
+      "topic": "failed-events-dlq",
+      "bufferSize": 100
+    },
+    "failFast": false
+  },
+
+  "dataQualityConfig": {
+    "enabled": true,
+    "validateAfterExtract": false,
+    "validateAfterTransform": true,
+    "onFailure": "warn",
+    "rules": [
+      {
+        "ruleType": "not_null",
+        "name": "RequiredFieldsRule",
+        "columns": ["user_id", "event_time"],
+        "severity": "error"
+      },
+      {
+        "ruleType": "range",
+        "name": "EventValueValidation",
+        "columns": ["total_value"],
+        "severity": "warning",
+        "parameters": {
+          "min": 0,
+          "max": 1000000
+        }
+      }
+    ]
+  },
+
+  "performanceConfig": {
+    "shufflePartitions": 200,
+    "broadcastThreshold": 10485760
+  },
+
+  "loggingConfig": {
+    "logLevel": "INFO",
+    "includeMetrics": true
+  }
+}
