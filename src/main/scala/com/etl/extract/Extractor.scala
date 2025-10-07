@@ -1,6 +1,7 @@
 package com.etl.extract
 
-import com.etl.config.ExtractConfig
+import com.etl.config.{CredentialVault, ExtractConfig}
+import com.etl.core.ExecutionContext
 import org.apache.spark.sql.{DataFrame, SparkSession}
 
 /**
@@ -31,4 +32,18 @@ trait Extractor {
    * @throws Exception if extraction fails (connection error, invalid config, etc.)
    */
   def extract(config: ExtractConfig)(implicit spark: SparkSession): DataFrame
+
+  /**
+   * Extract data from configured source with vault access.
+   * This method provides access to CredentialVault for secure credential retrieval.
+   * Default implementation delegates to extract(config) for backward compatibility.
+   *
+   * @param config Extract configuration
+   * @param vault Credential vault for secure credential access
+   * @param spark Implicit SparkSession
+   * @return DataFrame containing extracted data
+   */
+  def extractWithVault(config: ExtractConfig, vault: CredentialVault)(implicit spark: SparkSession): DataFrame = {
+    extract(config)(spark)
+  }
 }

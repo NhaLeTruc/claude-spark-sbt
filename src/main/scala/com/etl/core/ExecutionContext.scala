@@ -1,6 +1,6 @@
 package com.etl.core
 
-import com.etl.config.PipelineConfig
+import com.etl.config.{CredentialVault, PipelineConfig}
 import com.etl.model.ExecutionMetrics
 import org.apache.spark.sql.SparkSession
 
@@ -12,12 +12,14 @@ import java.util.UUID
  *
  * @param spark SparkSession for DataFrame operations
  * @param config Pipeline configuration
+ * @param vault Credential vault for secure credential access
  * @param metrics Execution metrics (mutable during execution)
  * @param traceId Unique trace identifier for this execution
  */
 case class ExecutionContext(
   spark: SparkSession,
   config: PipelineConfig,
+  vault: CredentialVault,
   var metrics: ExecutionMetrics,
   traceId: String = UUID.randomUUID().toString
 ) {
@@ -51,15 +53,17 @@ object ExecutionContext {
    *
    * @param spark SparkSession
    * @param config Pipeline configuration
+   * @param vault Credential vault
    * @return ExecutionContext with initialized metrics
    */
-  def create(spark: SparkSession, config: PipelineConfig): ExecutionContext = {
+  def create(spark: SparkSession, config: PipelineConfig, vault: CredentialVault): ExecutionContext = {
     val executionId = UUID.randomUUID().toString
     val metrics = ExecutionMetrics.initial(config.pipelineId, executionId)
 
     ExecutionContext(
       spark = spark,
       config = config,
+      vault = vault,
       metrics = metrics,
       traceId = UUID.randomUUID().toString
     )
