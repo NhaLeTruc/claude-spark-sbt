@@ -1,0 +1,45 @@
+{
+  "pipelineId": "cdc-postgres-to-kafka",
+  "description": "Change Data Capture: Incrementally load updated records from PostgreSQL to Kafka",
+  "extract": {
+    "sourceType": "PostgreSQL",
+    "connectionParams": {
+      "url": "jdbc:postgresql://localhost:5432/etl_database",
+      "user": "etl_user",
+      "password": "etl_password",
+      "driver": "org.postgresql.Driver",
+      "fetchSize": "10000",
+      "partitionColumn": "updated_at",
+      "numPartitions": "4",
+      "lowerBound": "2024-01-01 00:00:00",
+      "upperBound": "2024-12-31 23:59:59"
+    },
+    "query": "SELECT user_id, username, email, created_at, updated_at FROM users WHERE updated_at >= CURRENT_DATE - INTERVAL '1 day'",
+    "schema": null
+  },
+  "transforms": [],
+  "load": {
+    "sinkType": "Kafka",
+    "writeMode": "Append",
+    "connectionParams": {
+      "kafka.bootstrap.servers": "localhost:9092",
+      "topic": "user-updates"
+    },
+    "format": "avro",
+    "partitionBy": ["user_id"]
+  },
+  "performance": {
+    "batchSize": 50000,
+    "parallelism": 4,
+    "memoryPerExecutor": "4g"
+  },
+  "retry": {
+    "maxAttempts": 3,
+    "delaySeconds": 60,
+    "backoffMultiplier": 2.0
+  },
+  "logging": {
+    "level": "INFO",
+    "format": "json"
+  }
+}

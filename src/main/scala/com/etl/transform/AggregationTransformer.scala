@@ -27,6 +27,9 @@ class AggregationTransformer extends Transformer {
   override def transform(df: DataFrame, config: TransformConfig): DataFrame = {
     logger.info(s"Applying aggregation transformation with config: ${config.parameters}")
 
+    // Validate input DataFrame
+    validateInputDataFrame(df)
+
     // Parse groupBy columns
     val groupByJson = config.parameters.getOrElse(
       "groupBy",
@@ -37,6 +40,9 @@ class AggregationTransformer extends Transformer {
     if (groupByCols.isEmpty) {
       throw new IllegalArgumentException("groupBy must contain at least one column")
     }
+
+    // Validate groupBy columns exist in DataFrame
+    validateColumnsExist(df, groupByCols, "groupBy")
 
     logger.info(s"Grouping by columns: ${groupByCols.mkString(", ")}")
 
@@ -50,6 +56,12 @@ class AggregationTransformer extends Transformer {
     if (aggregationsMap.isEmpty) {
       throw new IllegalArgumentException("aggregations must contain at least one column aggregation")
     }
+
+    // Validate aggregation columns exist in DataFrame
+    validateColumnsExist(df, aggregationsMap.keys.toSeq, "aggregation")
+
+    // Validate aggregation functions
+    validateAggregationFunctions(aggregationsMap)
 
     logger.info(s"Applying aggregations: $aggregationsMap")
 
@@ -83,5 +95,54 @@ class AggregationTransformer extends Transformer {
     )
 
     result
+  }
+
+  /**
+   * Validate input DataFrame is not empty.
+   */
+  private def validateInputDataFrame(df: DataFrame): Unit = {
+    if (df.schema.isEmpty) {
+      throw new IllegalArgumentException("Input DataFrame schema is empty")
+    }
+  }
+
+  /**
+   * Validate that all specified columns exist in the DataFrame.
+   */
+  private def validateColumnsExist(df: DataFrame, columns: Seq[String], context: String): Unit = {
+    val dfColumns = df.schema.fieldNames.toSet
+    val missingColumns = columns.filterNot(dfColumns.contains)
+
+    if (missingColumns.nonEmpty) {
+      throw new IllegalArgumentException(
+        s"$context columns not found in DataFrame: ${missingColumns.mkString(", ")}. " +
+          s"Available columns: ${dfColumns.mkString(", ")}"
+      )
+    }
+  }
+
+  /**
+   * Validate that all aggregation functions are supported.
+   */
+  private def validateAggregationFunctions(aggregationsMap: Map[String, String]): Unit = {
+    val supportedFunctions = Set("sum", "avg", "min", "max", "count", "first", "last")
+
+    aggregationsMap.foreach { case (column, functions) =>
+      val functionList = functions.split(",").map(_.trim.toLowerCase)
+
+      if (functionList.isEmpty) {
+        throw new IllegalArgumentException(
+          s"No aggregation functions specified for column: $column"
+        )
+      }
+
+      val unsupportedFunctions = functionList.filterNot(supportedFunctions.contains)
+      if (unsupportedFunctions.nonEmpty) {
+        throw new IllegalArgumentException(
+          s"Unsupported aggregation functions for column '$column': ${unsupportedFunctions.mkString(", ")}. " +
+            s"Supported functions: ${supportedFunctions.mkString(", ")}"
+        )
+      }
+    }
   }
 }

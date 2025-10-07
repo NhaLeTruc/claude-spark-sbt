@@ -5,6 +5,7 @@ import com.etl.core.{ETLPipeline, PipelineExecutor}
 import com.etl.extract._
 import com.etl.load._
 import com.etl.transform._
+import com.etl.util.{GracefulShutdown, HealthCheck}
 import org.apache.spark.sql.SparkSession
 import org.slf4j.LoggerFactory
 
@@ -49,13 +50,31 @@ object Main {
       // Initialize SparkSession
       val spark = initializeSparkSession(config, mode)
 
+      // Register graceful shutdown handler
+      val shutdownHandler = GracefulShutdown(spark, shutdownTimeoutSeconds = 60)
+      logger.info("Graceful shutdown handler registered")
+
+      // Start health check endpoint
+      val healthCheck = HealthCheck(spark, port = 8888)
+      logger.info("Health check endpoint started on port 8888")
+
       try {
         // Build pipeline from configuration
         val pipeline = buildPipeline(config)
         logger.info("Pipeline constructed successfully")
 
+        // Mark application as ready
+        healthCheck.markReady()
+
         // Execute pipeline
         val executor = new PipelineExecutor()
+
+        // Check for shutdown during execution
+        if (shutdownHandler.isShutdownInitiated) {
+          logger.warn("Shutdown initiated before pipeline execution, exiting...")
+          System.exit(0)
+        }
+
         val result = executor.execute(pipeline, config)(spark)
 
         // Log final result
@@ -67,6 +86,13 @@ object Main {
               s"loaded=${result.metrics.recordsLoaded}, " +
               s"duration=${result.metrics.duration}ms"
           )
+
+          // For streaming mode, wait for shutdown signal
+          if (mode.toLowerCase == "streaming") {
+            logger.info("Streaming pipeline running. Waiting for shutdown signal...")
+            shutdownHandler.waitForShutdown()
+          }
+
           System.exit(0)
         } else {
           logger.error(
@@ -76,8 +102,14 @@ object Main {
           System.exit(1)
         }
       } finally {
-        spark.stop()
-        logger.info("SparkSession stopped")
+        // Stop health check endpoint
+        healthCheck.stop()
+
+        // Graceful shutdown handler will stop Spark, but ensure it's stopped here too
+        if (!spark.sparkContext.isStopped) {
+          spark.stop()
+          logger.info("SparkSession stopped")
+        }
       }
 
     } catch {

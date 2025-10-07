@@ -1,0 +1,54 @@
+{
+  "pipelineId": "multi-source-join",
+  "description": "Join user events from Kafka with user profiles from PostgreSQL",
+  "extract": {
+    "sourceType": "Kafka",
+    "connectionParams": {
+      "kafka.bootstrap.servers": "localhost:9092",
+      "subscribe": "user-events",
+      "startingOffsets": "earliest",
+      "endingOffsets": "latest"
+    },
+    "schema": "user-event"
+  },
+  "transforms": [
+    {
+      "transformType": "Aggregation",
+      "description": "Pre-aggregation before join to reduce data volume",
+      "parameters": {
+        "groupBy": "user_id",
+        "aggregations": {
+          "event_id": "count",
+          "amount": "sum",
+          "timestamp": "max"
+        }
+      }
+    }
+  ],
+  "load": {
+    "sinkType": "PostgreSQL",
+    "writeMode": "Upsert",
+    "connectionParams": {
+      "url": "jdbc:postgresql://localhost:5432/etl_database",
+      "user": "etl_user",
+      "password": "etl_password",
+      "driver": "org.postgresql.Driver"
+    },
+    "table": "user_summary",
+    "upsertKeys": ["user_id"]
+  },
+  "performance": {
+    "batchSize": 20000,
+    "parallelism": 4,
+    "memoryPerExecutor": "3g"
+  },
+  "retry": {
+    "maxAttempts": 3,
+    "delaySeconds": 30,
+    "backoffMultiplier": 1.5
+  },
+  "logging": {
+    "level": "INFO",
+    "format": "json"
+  }
+}

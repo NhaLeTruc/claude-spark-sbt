@@ -1,0 +1,61 @@
+{
+  "pipelineId": "real-time-event-processing",
+  "description": "Real-time processing of user events from Kafka with windowing and aggregation",
+  "extract": {
+    "sourceType": "Kafka",
+    "connectionParams": {
+      "kafka.bootstrap.servers": "localhost:9092",
+      "subscribe": "user-events",
+      "startingOffsets": "latest",
+      "maxOffsetsPerTrigger": "10000",
+      "failOnDataLoss": "false"
+    },
+    "schema": "user-event"
+  },
+  "transforms": [
+    {
+      "transformType": "Window",
+      "parameters": {
+        "windowFunction": "row_number",
+        "partitionBy": "user_id",
+        "orderBy": "timestamp:DESC",
+        "windowColumnName": "event_rank"
+      }
+    },
+    {
+      "transformType": "Aggregation",
+      "parameters": {
+        "groupBy": "user_id,event_type",
+        "aggregations": {
+          "event_id": "count",
+          "amount": "sum,avg",
+          "timestamp": "min,max"
+        }
+      }
+    }
+  ],
+  "load": {
+    "sinkType": "Kafka",
+    "writeMode": "Append",
+    "connectionParams": {
+      "kafka.bootstrap.servers": "localhost:9092",
+      "topic": "user-event-summary"
+    },
+    "format": "avro",
+    "schema": "user-summary"
+  },
+  "performance": {
+    "batchSize": 10000,
+    "parallelism": 8,
+    "memoryPerExecutor": "2g"
+  },
+  "retry": {
+    "maxAttempts": 5,
+    "delaySeconds": 30,
+    "backoffMultiplier": 2.0
+  },
+  "logging": {
+    "level": "INFO",
+    "format": "json"
+  }
+}
