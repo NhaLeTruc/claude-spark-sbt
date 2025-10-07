@@ -748,25 +748,74 @@ class RowLevelSecurity(
 
 ## 🔧 Technical Debt
 
-1. **JoinTransformer needs right DataFrame resolution**
-   - Currently throws error in Main.scala factory
-   - Need strategy for multi-input transformers
+**See [TECHNICAL_DEBT.md](TECHNICAL_DEBT.md:1) for comprehensive analysis**
 
-2. **Upsert implementation incomplete**
-   - PostgreSQL/MySQL loaders log warning but don't execute
-   - Need actual JDBC connection for temp table approach
+### Critical (Fix Before Production Scale-Out)
 
-3. **Schema validation not used in pipeline**
-   - SchemaValidator exists but not called in ETLPipeline
-   - Should validate after extract and transform
+1. **Incomplete Upsert Implementation** (6 hours, HIGH risk)
+   - PostgreSQL/MySQL loaders build SQL but don't execute it
+   - Creates temp tables that never get used
+   - Silent failure - users expect upsert but get append
+   - **Fix**: Add JDBC connection management for custom SQL execution
 
-4. **Credential vault not integrated**
-   - Extractors/loaders reference credentialId but don't retrieve
-   - Need to inject CredentialVault into components
+2. **SchemaValidator Not Integrated** (2 hours, MEDIUM risk)
+   - Validator exists and tested but never called in pipeline
+   - Schema mismatches discovered too late (at load time)
+   - **Fix**: Add validation after extract and transform stages
 
-5. **Error handling inconsistency**
-   - Some components throw, others return Either
-   - Should standardize on Either or Try
+3. **CredentialVault Not Integrated** (8 hours, HIGH risk)
+   - Vault implemented but extractors/loaders don't use it
+   - Passwords currently in plaintext config files
+   - **Fix**: Inject CredentialVault into all connectors
+
+4. **JoinTransformer Unusable from Config** (12 hours, MEDIUM risk)
+   - Cannot be instantiated via JSON configuration
+   - Requires programmatic setup with right DataFrame
+   - **Fix**: Add rightSource to TransformConfig or redesign multi-input transformers
+
+5. **Streaming Query Management Broken** (8 hours, HIGH risk)
+   - Query reference lost after start()
+   - Cannot monitor, stop, or await termination
+   - Metrics always show 0 records for streaming
+   - **Fix**: Track StreamingQuery instances in PipelineExecutor
+
+### Important (Address in Sprint 2)
+
+6. **Inconsistent Error Handling** (16 hours, MEDIUM risk)
+   - Mix of exceptions, Either, Try, and silent failures
+   - **Fix**: Standardize on Either for all fallible operations
+
+7. **No Streaming Watermarks** (10 hours, MEDIUM risk)
+   - Cannot handle late-arriving data
+   - Stateful operations keep infinite state
+   - **Fix**: Add StreamingConfig with watermark support
+
+8. **No JDBC Connection Pooling** (6 hours, MEDIUM risk)
+   - Each partition opens separate connection
+   - Database connection exhaustion under high parallelism
+   - **Fix**: Integrate HikariCP connection pool
+
+9. **S3 Credentials in Global State** (4 hours, HIGH risk)
+   - Modifies SparkContext Hadoop config globally
+   - Race conditions in concurrent pipelines
+   - Cannot use different credentials per source
+   - **Fix**: Use per-DataFrame Hadoop configuration
+
+10. **No Metrics Export** (8 hours, MEDIUM risk)
+    - Metrics tracked but only logged
+    - No Prometheus/CloudWatch integration
+    - Cannot monitor or alert in production
+    - **Fix**: Add MetricsReporter trait with Prometheus/CloudWatch implementations
+
+### Minor (Nice-to-Have)
+
+11. **No Exponential Backoff** (2 hours, LOW risk)
+12. **No DataFrame Caching** (1 hour, LOW risk)
+13. **Weak Null Safety** (4 hours, LOW risk)
+14. **No JDBC Transactions** (6 hours, LOW risk)
+15. **Deprecated HTTP Server** (6 hours, LOW risk)
+
+**Total Technical Debt**: 15 items, 79-115 hours effort
 
 ---
 
