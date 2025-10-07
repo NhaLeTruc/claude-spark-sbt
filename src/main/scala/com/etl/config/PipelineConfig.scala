@@ -310,6 +310,21 @@ case class LoggingConfig(
 )
 
 /**
+ * Streaming configuration type for pipeline mode.
+ */
+sealed trait PipelineMode
+object PipelineMode {
+  case object Batch extends PipelineMode
+  case object Streaming extends PipelineMode
+
+  def fromString(s: String): PipelineMode = s.toLowerCase match {
+    case "batch"     => Batch
+    case "streaming" => Streaming
+    case _ => throw new IllegalArgumentException(s"Unknown pipeline mode: $s. Valid values: batch, streaming")
+  }
+}
+
+/**
  * Complete pipeline configuration.
  *
  * @param pipelineId Unique pipeline identifier
@@ -321,6 +336,8 @@ case class LoggingConfig(
  * @param dataQualityConfig Data quality validation settings
  * @param performanceConfig Performance tuning parameters
  * @param loggingConfig Observability settings
+ * @param mode Pipeline execution mode (Batch or Streaming)
+ * @param streamingConfigJson Optional streaming configuration (JSON string or map)
  */
 case class PipelineConfig(
   pipelineId: String,
@@ -331,9 +348,21 @@ case class PipelineConfig(
   errorHandlingConfig: ErrorHandlingConfig = ErrorHandlingConfig(),
   dataQualityConfig: DataQualityConfig = DataQualityConfig(),
   performanceConfig: PerformanceConfig = PerformanceConfig(),
-  loggingConfig: LoggingConfig = LoggingConfig()
+  loggingConfig: LoggingConfig = LoggingConfig(),
+  mode: PipelineMode = PipelineMode.Batch,
+  streamingConfigJson: Option[Map[String, Any]] = None
 ) {
   // Backward compatibility: expose retry config for existing code
   @deprecated("Use errorHandlingConfig.retryConfig instead", "1.1.0")
   def retryConfig: RetryConfig = errorHandlingConfig.retryConfig
+
+  /**
+   * Check if this is a streaming pipeline.
+   */
+  def isStreaming: Boolean = mode == PipelineMode.Streaming
+
+  /**
+   * Check if streaming configuration is present.
+   */
+  def hasStreamingConfig: Boolean = streamingConfigJson.isDefined
 }
