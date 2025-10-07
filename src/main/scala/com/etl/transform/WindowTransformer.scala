@@ -35,6 +35,9 @@ class WindowTransformer extends Transformer {
   override def transform(df: DataFrame, config: TransformConfig): DataFrame = {
     logger.info(s"Applying window transformation with config: ${config.parameters}")
 
+    // Validate input DataFrame
+    validateInputDataFrame(df)
+
     // Parse partitionBy columns
     val partitionByJson = config.parameters.getOrElse(
       "partitionBy",
@@ -45,6 +48,9 @@ class WindowTransformer extends Transformer {
     if (partitionByCols.isEmpty) {
       throw new IllegalArgumentException("partitionBy must contain at least one column")
     }
+
+    // Validate partitionBy columns exist
+    validateColumnsExist(df, partitionByCols, "partitionBy")
 
     // Parse orderBy columns
     val orderByJson = config.parameters.getOrElse(
@@ -57,17 +63,32 @@ class WindowTransformer extends Transformer {
       throw new IllegalArgumentException("orderBy must contain at least one column")
     }
 
+    // Extract and validate orderBy column names
+    val orderByColumns = orderBySpecs.map { spec =>
+      val parts = spec.trim.split("\\s+")
+      parts(0) // Get column name without direction
+    }
+    validateColumnsExist(df, orderByColumns, "orderBy")
+
     // Parse window function
     val windowFunction = config.parameters.getOrElse(
       "windowFunction",
       throw new IllegalArgumentException("windowFunction parameter is required")
     ).toLowerCase
 
+    // Validate window function
+    validateWindowFunction(windowFunction)
+
     // Parse output column
     val outputColumn = config.parameters.getOrElse(
       "outputColumn",
       throw new IllegalArgumentException("outputColumn parameter is required")
     )
+
+    // Validate output column doesn't already exist
+    if (df.schema.fieldNames.contains(outputColumn)) {
+      logger.warn(s"Output column '$outputColumn' already exists and will be overwritten")
+    }
 
     logger.info(
       s"Window function: $windowFunction, " +
@@ -112,6 +133,7 @@ class WindowTransformer extends Transformer {
           "aggregateColumn",
           throw new IllegalArgumentException("aggregateColumn is required for sum function")
         )
+        validateColumnsExist(df, Seq(aggCol), "aggregateColumn")
         sum(col(aggCol)).over(windowSpec)
 
       case "avg" =>
@@ -119,6 +141,7 @@ class WindowTransformer extends Transformer {
           "aggregateColumn",
           throw new IllegalArgumentException("aggregateColumn is required for avg function")
         )
+        validateColumnsExist(df, Seq(aggCol), "aggregateColumn")
         avg(col(aggCol)).over(windowSpec)
 
       case "min" =>
@@ -126,6 +149,7 @@ class WindowTransformer extends Transformer {
           "aggregateColumn",
           throw new IllegalArgumentException("aggregateColumn is required for min function")
         )
+        validateColumnsExist(df, Seq(aggCol), "aggregateColumn")
         min(col(aggCol)).over(windowSpec)
 
       case "max" =>
@@ -133,6 +157,7 @@ class WindowTransformer extends Transformer {
           "aggregateColumn",
           throw new IllegalArgumentException("aggregateColumn is required for max function")
         )
+        validateColumnsExist(df, Seq(aggCol), "aggregateColumn")
         max(col(aggCol)).over(windowSpec)
 
       case "count" =>
@@ -140,6 +165,7 @@ class WindowTransformer extends Transformer {
           "aggregateColumn",
           throw new IllegalArgumentException("aggregateColumn is required for count function")
         )
+        validateColumnsExist(df, Seq(aggCol), "aggregateColumn")
         count(col(aggCol)).over(windowSpec)
 
       // Offset functions
@@ -148,7 +174,9 @@ class WindowTransformer extends Transformer {
           "aggregateColumn",
           throw new IllegalArgumentException("aggregateColumn is required for lag function")
         )
+        validateColumnsExist(df, Seq(aggCol), "aggregateColumn")
         val offset = config.parameters.get("offset").map(_.toInt).getOrElse(1)
+        validateOffset(offset)
         lag(col(aggCol), offset).over(windowSpec)
 
       case "lead" =>
@@ -156,7 +184,9 @@ class WindowTransformer extends Transformer {
           "aggregateColumn",
           throw new IllegalArgumentException("aggregateColumn is required for lead function")
         )
+        validateColumnsExist(df, Seq(aggCol), "aggregateColumn")
         val offset = config.parameters.get("offset").map(_.toInt).getOrElse(1)
+        validateOffset(offset)
         lead(col(aggCol), offset).over(windowSpec)
 
       case other =>
@@ -176,5 +206,58 @@ class WindowTransformer extends Transformer {
     )
 
     result
+  }
+
+  /**
+   * Validate input DataFrame is not empty.
+   */
+  private def validateInputDataFrame(df: DataFrame): Unit = {
+    if (df.schema.isEmpty) {
+      throw new IllegalArgumentException("Input DataFrame schema is empty")
+    }
+  }
+
+  /**
+   * Validate that all specified columns exist in the DataFrame.
+   */
+  private def validateColumnsExist(df: DataFrame, columns: Seq[String], context: String): Unit = {
+    val dfColumns = df.schema.fieldNames.toSet
+    val missingColumns = columns.filterNot(dfColumns.contains)
+
+    if (missingColumns.nonEmpty) {
+      throw new IllegalArgumentException(
+        s"$context columns not found in DataFrame: ${missingColumns.mkString(", ")}. " +
+          s"Available columns: ${dfColumns.mkString(", ")}"
+      )
+    }
+  }
+
+  /**
+   * Validate that the window function is supported.
+   */
+  private def validateWindowFunction(windowFunction: String): Unit = {
+    val supportedFunctions = Set(
+      "row_number", "rank", "dense_rank",
+      "sum", "avg", "min", "max", "count",
+      "lag", "lead"
+    )
+
+    if (!supportedFunctions.contains(windowFunction)) {
+      throw new IllegalArgumentException(
+        s"Unsupported window function: $windowFunction. " +
+          s"Supported functions: ${supportedFunctions.mkString(", ")}"
+      )
+    }
+  }
+
+  /**
+   * Validate offset value for lag/lead functions.
+   */
+  private def validateOffset(offset: Int): Unit = {
+    if (offset < 1) {
+      throw new IllegalArgumentException(
+        s"Invalid offset value: $offset. Offset must be positive (>= 1)"
+      )
+    }
   }
 }

@@ -1,0 +1,69 @@
+{
+  "pipelineId": "incremental-load",
+  "description": "Incremental data load from MySQL to S3 with daily partitioning",
+  "extract": {
+    "sourceType": "MySQL",
+    "connectionParams": {
+      "url": "jdbc:mysql://localhost:3306/etl_database",
+      "user": "etl_user",
+      "password": "etl_password",
+      "driver": "com.mysql.cj.jdbc.Driver",
+      "fetchSize": "20000"
+    },
+    "table": "transactions",
+    "schema": null
+  },
+  "transforms": [
+    {
+      "transformType": "Window",
+      "description": "Add date partition column from timestamp",
+      "parameters": {
+        "windowFunction": "lead",
+        "partitionBy": "transaction_type",
+        "orderBy": "transaction_timestamp:ASC",
+        "windowColumnName": "next_transaction_timestamp",
+        "offset": "1"
+      }
+    },
+    {
+      "transformType": "Aggregation",
+      "description": "Daily transaction summary by type",
+      "parameters": {
+        "groupBy": "transaction_type",
+        "aggregations": {
+          "transaction_id": "count",
+          "amount": "sum,avg,min,max"
+        }
+      }
+    }
+  ],
+  "load": {
+    "sinkType": "S3",
+    "writeMode": "Append",
+    "connectionParams": {
+      "path": "s3a://etl-sink-data/transactions/",
+      "accessKeyId": "test",
+      "secretAccessKey": "test",
+      "endpoint": "http://localhost:4566",
+      "region": "us-east-1",
+      "pathStyleAccess": "true"
+    },
+    "format": "parquet",
+    "partitionBy": ["transaction_type"],
+    "compressionCodec": "gzip"
+  },
+  "performance": {
+    "batchSize": 50000,
+    "parallelism": 4,
+    "memoryPerExecutor": "3g"
+  },
+  "retry": {
+    "maxAttempts": 5,
+    "delaySeconds": 60,
+    "backoffMultiplier": 1.5
+  },
+  "logging": {
+    "level": "INFO",
+    "format": "json"
+  }
+}

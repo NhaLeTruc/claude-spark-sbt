@@ -1,0 +1,71 @@
+{
+  "pipelineId": "data-quality-pipeline",
+  "description": "Data quality pipeline with validation, deduplication, and filtering",
+  "extract": {
+    "sourceType": "S3",
+    "connectionParams": {
+      "path": "s3a://etl-source-data/events/",
+      "accessKeyId": "test",
+      "secretAccessKey": "test",
+      "endpoint": "http://localhost:4566",
+      "region": "us-east-1",
+      "pathStyleAccess": "true"
+    },
+    "format": "json",
+    "schema": "user-event"
+  },
+  "transforms": [
+    {
+      "transformType": "Aggregation",
+      "description": "Remove duplicates by grouping on event_id and taking first occurrence",
+      "parameters": {
+        "groupBy": "event_id",
+        "aggregations": {
+          "user_id": "first",
+          "event_type": "first",
+          "timestamp": "first",
+          "amount": "first"
+        }
+      }
+    },
+    {
+      "transformType": "Window",
+      "description": "Rank events by timestamp for each user",
+      "parameters": {
+        "windowFunction": "row_number",
+        "partitionBy": "user_id",
+        "orderBy": "timestamp:ASC",
+        "windowColumnName": "event_sequence"
+      }
+    }
+  ],
+  "load": {
+    "sinkType": "S3",
+    "writeMode": "Overwrite",
+    "connectionParams": {
+      "path": "s3a://etl-sink-data/cleaned-events/",
+      "accessKeyId": "test",
+      "secretAccessKey": "test",
+      "endpoint": "http://localhost:4566",
+      "region": "us-east-1",
+      "pathStyleAccess": "true"
+    },
+    "format": "parquet",
+    "partitionBy": ["event_type"],
+    "compressionCodec": "snappy"
+  },
+  "performance": {
+    "batchSize": 100000,
+    "parallelism": 8,
+    "memoryPerExecutor": "4g"
+  },
+  "retry": {
+    "maxAttempts": 3,
+    "delaySeconds": 20,
+    "backoffMultiplier": 2.0
+  },
+  "logging": {
+    "level": "INFO",
+    "format": "json"
+  }
+}

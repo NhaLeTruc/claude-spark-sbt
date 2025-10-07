@@ -26,6 +26,9 @@ class JoinTransformer(rightDf: DataFrame) extends Transformer {
   override def transform(df: DataFrame, config: TransformConfig): DataFrame = {
     logger.info(s"Applying join transformation with config: ${config.parameters}")
 
+    // Validate input DataFrames
+    validateInputDataFrames(df, rightDf)
+
     // Parse join type
     val joinType = config.parameters.getOrElse(
       "joinType",
@@ -50,32 +53,31 @@ class JoinTransformer(rightDf: DataFrame) extends Transformer {
     )
     val joinColumns = Json.parse(joinColumnsJson).as[Seq[String]]
 
-    if (joinColumns.isEmpty) {
-      throw new IllegalArgumentException("joinColumns must contain at least one column")
+    if (joinColumns.isEmpty && joinType != "cross") {
+      throw new IllegalArgumentException("joinColumns must contain at least one column for non-cross joins")
+    }
+
+    if (joinColumns.nonEmpty && joinType == "cross") {
+      logger.warn(s"Cross join does not use join columns, but ${joinColumns.size} column(s) provided")
     }
 
     logger.info(s"Joining on columns: ${joinColumns.mkString(", ")}")
 
-    // Validate columns exist in both DataFrames
-    val leftColumns = df.schema.fieldNames.toSet
-    val rightColumns = rightDf.schema.fieldNames.toSet
-
-    joinColumns.foreach { col =>
-      if (!leftColumns.contains(col)) {
-        throw new IllegalArgumentException(s"Join column '$col' not found in left DataFrame")
-      }
-      if (!rightColumns.contains(col)) {
-        throw new IllegalArgumentException(s"Join column '$col' not found in right DataFrame")
-      }
+    // Validate columns exist in both DataFrames (skip for cross join)
+    if (joinType != "cross") {
+      validateJoinColumns(df, rightDf, joinColumns)
     }
 
-    // Build join condition
-    val joinCondition = joinColumns.map { colName =>
-      df(colName) === rightDf(colName)
-    }.reduce(_ && _)
-
     // Perform join
-    val result = df.join(rightDf, joinCondition, joinType)
+    val result = if (joinType == "cross" || joinColumns.isEmpty) {
+      df.join(rightDf, joinType = joinType)
+    } else {
+      // Build join condition
+      val joinCondition = joinColumns.map { colName =>
+        df(colName) === rightDf(colName)
+      }.reduce(_ && _)
+      df.join(rightDf, joinCondition, joinType)
+    }
 
     logger.info(
       s"Join complete. " +
@@ -86,5 +88,42 @@ class JoinTransformer(rightDf: DataFrame) extends Transformer {
     )
 
     result
+  }
+
+  /**
+   * Validate that input DataFrames are not empty and have valid schemas.
+   */
+  private def validateInputDataFrames(leftDf: DataFrame, rightDf: DataFrame): Unit = {
+    if (leftDf.schema.isEmpty) {
+      throw new IllegalArgumentException("Left DataFrame schema is empty")
+    }
+    if (rightDf.schema.isEmpty) {
+      throw new IllegalArgumentException("Right DataFrame schema is empty")
+    }
+  }
+
+  /**
+   * Validate that join columns exist in both DataFrames.
+   */
+  private def validateJoinColumns(leftDf: DataFrame, rightDf: DataFrame, joinColumns: Seq[String]): Unit = {
+    val leftColumns = leftDf.schema.fieldNames.toSet
+    val rightColumns = rightDf.schema.fieldNames.toSet
+
+    val missingFromLeft = joinColumns.filterNot(leftColumns.contains)
+    val missingFromRight = joinColumns.filterNot(rightColumns.contains)
+
+    if (missingFromLeft.nonEmpty) {
+      throw new IllegalArgumentException(
+        s"Join columns not found in left DataFrame: ${missingFromLeft.mkString(", ")}. " +
+          s"Available columns: ${leftColumns.mkString(", ")}"
+      )
+    }
+
+    if (missingFromRight.nonEmpty) {
+      throw new IllegalArgumentException(
+        s"Join columns not found in right DataFrame: ${missingFromRight.mkString(", ")}. " +
+          s"Available columns: ${rightColumns.mkString(", ")}"
+      )
+    }
   }
 }
