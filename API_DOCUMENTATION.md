@@ -505,6 +505,195 @@ val config = ExtractConfig(
 val df = extractor.extractWithVault(config, vault)(spark)
 ```
 
+### DeltaLakeExtractor
+
+Reads data from Delta Lake tables with time travel and change data feed support.
+
+```scala
+class DeltaLakeExtractor extends Extractor
+```
+
+**Supported Features**:
+- ✅ **Time Travel**: Query historical versions by version number or timestamp
+- ✅ **Change Data Feed**: Read CDC changes (inserts/updates/deletes)
+- ✅ **ACID Reads**: Consistent snapshot isolation
+- ✅ **Schema Evolution**: Handle schema changes across versions
+
+**Configuration Parameters**:
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `path` | String | Delta table path (e.g., `s3a://bucket/delta-tables/users`) |
+| `versionAsOf` | Long | Read specific version number (time travel) |
+| `timestampAsOf` | String | Read as of timestamp (time travel, format: `yyyy-MM-dd HH:mm:ss`) |
+| `readChangeFeed` | Boolean | Read change data feed instead of current state |
+| `startingVersion` | Long | Starting version for CDC (inclusive) |
+| `startingTimestamp` | String | Starting timestamp for CDC |
+| `endingVersion` | Long | Ending version for CDC (inclusive) |
+| `endingTimestamp` | String | Ending timestamp for CDC |
+| `ignoreDeletes` | Boolean | Ignore deleted rows in change feed |
+| `ignoreChanges` | Boolean | Ignore updated rows in change feed |
+
+**Example 1: Read Latest Version**
+
+```scala
+val extractor = new DeltaLakeExtractor()
+
+val config = ExtractConfig(
+  sourceType = SourceType.DeltaLake,
+  connectionParams = Map(
+    "path" -> "s3a://data-lake/delta/users"
+  ),
+  credentialId = Some("s3-credentials")
+)
+
+val df = extractor.extractWithVault(config, vault)(spark)
+```
+
+**Example 2: Time Travel by Version**
+
+```scala
+// Read data as it was at version 42
+val config = ExtractConfig(
+  sourceType = SourceType.DeltaLake,
+  connectionParams = Map(
+    "path" -> "s3a://data-lake/delta/users",
+    "versionAsOf" -> "42"
+  ),
+  credentialId = Some("s3-credentials")
+)
+
+val historicalDf = extractor.extractWithVault(config, vault)(spark)
+```
+
+**Example 3: Time Travel by Timestamp**
+
+```scala
+// Read data as of specific timestamp
+val config = ExtractConfig(
+  sourceType = SourceType.DeltaLake,
+  connectionParams = Map(
+    "path" -> "s3a://data-lake/delta/users",
+    "timestampAsOf" -> "2024-01-01 12:00:00"
+  ),
+  credentialId = Some("s3-credentials")
+)
+
+val snapshotDf = extractor.extractWithVault(config, vault)(spark)
+```
+
+**Example 4: Change Data Feed (CDC)**
+
+```scala
+// Read all changes from version 100 onwards
+val config = ExtractConfig(
+  sourceType = SourceType.DeltaLake,
+  connectionParams = Map(
+    "path" -> "s3a://data-lake/delta/users",
+    "readChangeFeed" -> "true",
+    "startingVersion" -> "100"
+  ),
+  credentialId = Some("s3-credentials")
+)
+
+val changesDf = extractor.extractWithVault(config, vault)(spark)
+
+// changesDf has CDC columns: _change_type, _commit_version, _commit_timestamp
+// _change_type: "insert", "update_preimage", "update_postimage", "delete"
+```
+
+**Example 5: Change Data Feed with Time Range**
+
+```scala
+// Read changes between two timestamps
+val config = ExtractConfig(
+  sourceType = SourceType.DeltaLake,
+  connectionParams = Map(
+    "path" -> "s3a://data-lake/delta/users",
+    "readChangeFeed" -> "true",
+    "startingTimestamp" -> "2024-01-01 00:00:00",
+    "endingTimestamp" -> "2024-01-02 00:00:00"
+  ),
+  credentialId = Some("s3-credentials")
+)
+
+val dailyChangesDf = extractor.extractWithVault(config, vault)(spark)
+```
+
+**Example 6: Incremental Processing with CDC**
+
+```scala
+// Only read inserts (ignore updates and deletes)
+val config = ExtractConfig(
+  sourceType = SourceType.DeltaLake,
+  connectionParams = Map(
+    "path" -> "s3a://data-lake/delta/users",
+    "readChangeFeed" -> "true",
+    "startingVersion" -> "100",
+    "ignoreDeletes" -> "true",
+    "ignoreChanges" -> "true"
+  ),
+  credentialId = Some("s3-credentials")
+)
+
+val insertsDf = extractor.extractWithVault(config, vault)(spark)
+```
+
+**Use Cases**:
+
+1. **Rollback/Recovery**: Read previous versions to recover from bad data
+```scala
+// Restore to last known good version
+val goodData = extractor.extractWithVault(
+  ExtractConfig(
+    sourceType = SourceType.DeltaLake,
+    connectionParams = Map("path" -> path, "versionAsOf" -> "10")
+  ),
+  vault
+)(spark)
+```
+
+2. **Audit/Compliance**: Query historical state for audits
+```scala
+// "What did the data look like on 2024-01-01?"
+val auditSnapshot = extractor.extractWithVault(
+  ExtractConfig(
+    sourceType = SourceType.DeltaLake,
+    connectionParams = Map("path" -> path, "timestampAsOf" -> "2024-01-01 00:00:00")
+  ),
+  vault
+)(spark)
+```
+
+3. **Incremental ETL**: Process only changes since last run
+```scala
+// Read changes since last checkpoint
+val lastVersion = getLastProcessedVersion()
+val changes = extractor.extractWithVault(
+  ExtractConfig(
+    sourceType = SourceType.DeltaLake,
+    connectionParams = Map(
+      "path" -> path,
+      "readChangeFeed" -> "true",
+      "startingVersion" -> lastVersion.toString
+    )
+  ),
+  vault
+)(spark)
+```
+
+4. **ML Model Training**: Reproduce exact dataset used for training
+```scala
+// Recreate training dataset from specific version
+val trainingData = extractor.extractWithVault(
+  ExtractConfig(
+    sourceType = SourceType.DeltaLake,
+    connectionParams = Map("path" -> path, "versionAsOf" -> modelMetadata.dataVersion.toString)
+  ),
+  vault
+)(spark)
+```
+
 ### KafkaExtractor
 
 Reads data from Apache Kafka (batch or streaming).
@@ -837,6 +1026,196 @@ val result = loader.loadWithVault(df, config, WriteMode.Overwrite, vault)
 if (result.isSuccess) {
   println(s"Loaded ${result.recordsLoaded} records")
 }
+```
+
+### DeltaLakeLoader
+
+Writes data to Delta Lake tables with ACID transactions, upsert/merge, and time travel support.
+
+```scala
+class DeltaLakeLoader extends Loader
+```
+
+**Supported Features**:
+- ✅ **ACID Transactions**: All-or-nothing writes (no partial failures)
+- ✅ **Upsert/Merge**: Update existing + insert new records atomically
+- ✅ **Schema Evolution**: Automatic schema merging
+- ✅ **Time Travel**: Version history for rollback and audit
+- ✅ **Optimizations**: Auto-compaction, Z-ordering, data skipping
+
+**Write Modes**: `Append`, `Overwrite` (full/partition), `Upsert`
+
+**Configuration Parameters**:
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `path` | String | Yes | Delta table path (e.g., `s3a://bucket/delta-tables/users`) |
+| `mergeKeys` | JSON Array | For Upsert | Columns for merge condition (e.g., `["id"]` or `["user_id", "date"]`) |
+| `updateCondition` | String | No | Condition for updates (e.g., `source.timestamp > target.timestamp`) |
+| `deleteCondition` | String | No | Condition for deletes (e.g., `source.deleted = true`) |
+| `mergeSchema` | Boolean | No | Enable schema evolution (`true`/`false`) |
+| `partitionBy` | JSON Array | No | Partition columns (e.g., `["date", "region"]`) |
+| `replaceWhere` | String | For Overwrite | Partition filter for targeted overwrite (e.g., `date >= '2024-01-01'`) |
+| `optimizeWrite` | Boolean | No | Enable auto-optimization during write |
+| `autoCompact` | Boolean | No | Enable auto-compaction of small files |
+| `optimizeAfterWrite` | Boolean | No | Run OPTIMIZE after write completes |
+| `zOrderColumns` | JSON Array | No | Columns for Z-ordering (e.g., `["date", "user_id"]`) |
+| `vacuumRetentionHours` | Integer | No | Hours to retain old versions (default: 168 = 7 days) |
+| `enableChangeDataFeed` | Boolean | No | Track all changes for CDC (`true`/`false`) |
+
+**Example 1: Append with Schema Evolution**
+
+```scala
+val loader = new DeltaLakeLoader()
+
+val config = LoadConfig(
+  sinkType = SinkType.DeltaLake,
+  connectionParams = Map(
+    "path" -> "s3a://data-lake/delta/users",
+    "mergeSchema" -> "true",
+    "partitionBy" -> "[\"country\", \"created_date\"]"
+  ),
+  credentialId = Some("s3-credentials")
+)
+
+val result = loader.load(df, config, WriteMode.Append)
+```
+
+**Example 2: Upsert (Merge)**
+
+```scala
+// Upsert: Update existing records (matching on 'id'), insert new ones
+val config = LoadConfig(
+  sinkType = SinkType.DeltaLake,
+  connectionParams = Map(
+    "path" -> "s3a://data-lake/delta/users",
+    "mergeKeys" -> "[\"id\"]"  // Primary key
+  ),
+  credentialId = Some("s3-credentials")
+)
+
+val result = loader.load(updatesDf, config, WriteMode.Upsert)
+```
+
+Generates SQL:
+```sql
+MERGE INTO target
+USING source
+ON target.id = source.id
+WHEN MATCHED THEN UPDATE SET *
+WHEN NOT MATCHED THEN INSERT *
+```
+
+**Example 3: Conditional Upsert (Update Only If Newer)**
+
+```scala
+val config = LoadConfig(
+  sinkType = SinkType.DeltaLake,
+  connectionParams = Map(
+    "path" -> "s3a://data-lake/delta/users",
+    "mergeKeys" -> "[\"id\"]",
+    "updateCondition" -> "source.timestamp > target.timestamp"  // Only update if newer
+  ),
+  credentialId = Some("s3-credentials")
+)
+
+val result = loader.load(updatesDf, config, WriteMode.Upsert)
+```
+
+**Example 4: Partition Overwrite**
+
+```scala
+// Overwrite only specific partitions
+val config = LoadConfig(
+  sinkType = SinkType.DeltaLake,
+  connectionParams = Map(
+    "path" -> "s3a://data-lake/delta/events",
+    "replaceWhere" -> "event_date = '2024-01-01'",  // Only replace this partition
+    "partitionBy" -> "[\"event_date\"]"
+  ),
+  credentialId = Some("s3-credentials")
+)
+
+val result = loader.load(df, config, WriteMode.Overwrite)
+```
+
+**Example 5: Optimized Write with Z-Ordering**
+
+```scala
+val config = LoadConfig(
+  sinkType = SinkType.DeltaLake,
+  connectionParams = Map(
+    "path" -> "s3a://data-lake/delta/transactions",
+    "optimizeWrite" -> "true",           // Auto-optimize during write
+    "autoCompact" -> "true",             // Auto-compact small files
+    "optimizeAfterWrite" -> "true",      // Run OPTIMIZE after write
+    "zOrderColumns" -> "[\"date\", \"user_id\"]"  // Z-order for faster queries
+  ),
+  credentialId = Some("s3-credentials")
+)
+
+val result = loader.load(df, config, WriteMode.Append)
+```
+
+**Example 6: Upsert with Deletes (CDC Pattern)**
+
+```scala
+val config = LoadConfig(
+  sinkType = SinkType.DeltaLake,
+  connectionParams = Map(
+    "path" -> "s3a://data-lake/delta/users",
+    "mergeKeys" -> "[\"id\"]",
+    "deleteCondition" -> "source.deleted = true"  // Delete if marked deleted
+  ),
+  credentialId = Some("s3-credentials")
+)
+
+// DataFrame with deleted flag
+val changesDf = Seq(
+  (1, "Alice", false),  // Update
+  (2, "Bob", true),     // Delete
+  (3, "Charlie", false) // Insert
+).toDF("id", "name", "deleted")
+
+val result = loader.load(changesDf, config, WriteMode.Upsert)
+```
+
+**Performance Tuning**:
+
+```scala
+// For high-throughput writes
+val config = LoadConfig(
+  sinkType = SinkType.DeltaLake,
+  connectionParams = Map(
+    "path" -> "s3a://data-lake/delta/high-volume",
+    "optimizeWrite" -> "true",           // Fewer, larger files
+    "autoCompact" -> "true",             // Prevent small file problem
+    "partitionBy" -> "[\"date\"]"        // Partition for parallelism
+  )
+)
+
+// For low-latency reads (optimize after write)
+val config = LoadConfig(
+  sinkType = SinkType.DeltaLake,
+  connectionParams = Map(
+    "path" -> "s3a://data-lake/delta/analytics",
+    "optimizeAfterWrite" -> "true",
+    "zOrderColumns" -> "[\"user_id\", \"timestamp\"]"  // Co-locate related data
+  )
+)
+```
+
+**Storage Management**:
+
+```scala
+// Vacuum old versions (reclaim storage)
+val config = LoadConfig(
+  sinkType = SinkType.DeltaLake,
+  connectionParams = Map(
+    "path" -> "s3a://data-lake/delta/users",
+    "vacuumRetentionHours" -> "168"  // 7 days retention for time travel
+  )
+)
 ```
 
 ### PostgreSQLLoader

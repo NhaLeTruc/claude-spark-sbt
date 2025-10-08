@@ -9,12 +9,14 @@ object SourceType {
   case object PostgreSQL extends SourceType
   case object MySQL extends SourceType
   case object S3 extends SourceType
+  case object DeltaLake extends SourceType
 
   def fromString(s: String): SourceType = s.toLowerCase match {
     case "kafka"      => Kafka
     case "postgresql" => PostgreSQL
     case "mysql"      => MySQL
     case "s3"         => S3
+    case "deltalake" | "delta" => DeltaLake
     case _            => throw new IllegalArgumentException(s"Unknown source type: $s")
   }
 }
@@ -25,12 +27,14 @@ object SinkType {
   case object PostgreSQL extends SinkType
   case object MySQL extends SinkType
   case object S3 extends SinkType
+  case object DeltaLake extends SinkType
 
   def fromString(s: String): SinkType = s.toLowerCase match {
     case "kafka"      => Kafka
     case "postgresql" => PostgreSQL
     case "mysql"      => MySQL
     case "s3"         => S3
+    case "deltalake" | "delta" => DeltaLake
     case _            => throw new IllegalArgumentException(s"Unknown sink type: $s")
   }
 }
