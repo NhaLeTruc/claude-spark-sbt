@@ -27,6 +27,10 @@ libraryDependencies ++= Seq(
   "org.apache.hadoop" % "hadoop-aws" % "3.3.6",
   "com.amazonaws" % "aws-java-sdk-bundle" % "1.12.367",
 
+  // Delta Lake
+  "io.delta" %% "delta-core" % "3.1.0",
+  "io.delta" %% "delta-storage" % "3.1.0",
+
   // JSON Parsing
   "com.typesafe.play" %% "play-json" % "2.9.4",
 
