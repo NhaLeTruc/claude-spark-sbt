@@ -144,7 +144,8 @@ case class StreamingConfig(
   enableIdempotence: Boolean = true,
   maxRecordsPerTrigger: Option[Long] = None,
   maxFilesPerTrigger: Option[Int] = None,
-  stateTimeout: Option[String] = None
+  stateTimeout: Option[String] = None,
+  lateDataConfig: Option[LateDataConfig] = None
 ) {
   require(checkpointLocation.nonEmpty, "Checkpoint location cannot be empty")
   require(queryName.nonEmpty, "Query name cannot be empty")

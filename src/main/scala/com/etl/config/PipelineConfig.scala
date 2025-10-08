@@ -365,4 +365,16 @@ case class PipelineConfig(
    * Check if streaming configuration is present.
    */
   def hasStreamingConfig: Boolean = streamingConfigJson.isDefined
+
+  /**
+   * Get parsed StreamingConfig from JSON configuration.
+   *
+   * @return Some(StreamingConfig) if present and parseable, None otherwise
+   * @throws IllegalArgumentException if JSON is malformed
+   */
+  def getStreamingConfig: Option[com.etl.streaming.StreamingConfig] = {
+    streamingConfigJson.map { json =>
+      com.etl.streaming.StreamingConfigFactory.fromJson(json)
+    }
+  }
 }
