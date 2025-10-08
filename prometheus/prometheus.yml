@@ -1,0 +1,89 @@
+# Prometheus configuration for ETL Pipeline monitoring
+#
+# Usage:
+#   prometheus --config.file=prometheus.yml
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'etl-production'
+    env: 'prod'
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - localhost:9093
+
+# Load alerting rules
+rule_files:
+  - 'alerting-rules.yml'
+
+# Scrape configurations
+scrape_configs:
+  # ETL Pipeline metrics (from MetricsHttpServer)
+  - job_name: 'etl-pipeline'
+    static_configs:
+      - targets:
+          - 'localhost:9090'
+        labels:
+          application: 'etl-framework'
+          component: 'pipeline'
+
+    # Optional: Relabel pipeline instances
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'etl-pipeline-1'
+
+  # Spark metrics (if using Spark's built-in metrics)
+  - job_name: 'spark-driver'
+    static_configs:
+      - targets:
+          - 'localhost:4040'
+        labels:
+          application: 'etl-framework'
+          component: 'spark-driver'
+
+  - job_name: 'spark-executors'
+    static_configs:
+      - targets:
+          - 'localhost:4041'
+          - 'localhost:4042'
+          - 'localhost:4043'
+        labels:
+          application: 'etl-framework'
+          component: 'spark-executor'
+
+  # Node exporter (system metrics)
+  - job_name: 'node'
+    static_configs:
+      - targets:
+          - 'localhost:9100'
+        labels:
+          application: 'etl-framework'
+          component: 'host'
+
+  # Health check endpoint
+  - job_name: 'etl-health'
+    metrics_path: '/health'
+    static_configs:
+      - targets:
+          - 'localhost:8888'
+        labels:
+          application: 'etl-framework'
+          component: 'healthcheck'
+
+# Optional: Remote write to long-term storage
+# remote_write:
+#   - url: 'http://prometheus-remote-storage:9201/write'
+#     queue_config:
+#       capacity: 10000
+#       max_shards: 5
+#       min_shards: 1
+
+# Optional: Remote read from long-term storage
+# remote_read:
+#   - url: 'http://prometheus-remote-storage:9201/read'

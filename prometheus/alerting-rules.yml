@@ -1,0 +1,283 @@
+groups:
+  - name: etl_pipeline_alerts
+    interval: 30s
+    rules:
+      # ===== Pipeline Health Alerts =====
+
+      - alert: ETLPipelineHighFailureRate
+        expr: |
+          (
+            rate(etl_pipeline_executions_total{status="failure"}[5m])
+            /
+            (rate(etl_pipeline_executions_total[5m]) + 0.0001)
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          component: etl_pipeline
+        annotations:
+          summary: "ETL Pipeline {{ $labels.pipeline_id }} has high failure rate"
+          description: "Pipeline {{ $labels.pipeline_id }} failure rate is {{ $value | humanizePercentage }} (threshold: 5%)"
+          runbook_url: "https://wiki.example.com/runbooks/etl-pipeline-high-failure-rate"
+
+      - alert: ETLPipelineCriticalFailureRate
+        expr: |
+          (
+            rate(etl_pipeline_executions_total{status="failure"}[5m])
+            /
+            (rate(etl_pipeline_executions_total[5m]) + 0.0001)
+          ) > 0.20
+        for: 2m
+        labels:
+          severity: critical
+          component: etl_pipeline
+        annotations:
+          summary: "ETL Pipeline {{ $labels.pipeline_id }} has critical failure rate"
+          description: "Pipeline {{ $labels.pipeline_id }} failure rate is {{ $value | humanizePercentage }} (threshold: 20%)"
+          runbook_url: "https://wiki.example.com/runbooks/etl-pipeline-critical-failure-rate"
+
+      - alert: ETLPipelineNoExecutions
+        expr: |
+          (
+            sum(rate(etl_pipeline_executions_total[10m])) by (pipeline_id) == 0
+          )
+          and
+          (
+            sum(rate(etl_pipeline_executions_total[1h] offset 1h)) by (pipeline_id) > 0
+          )
+        for: 15m
+        labels:
+          severity: warning
+          component: etl_pipeline
+        annotations:
+          summary: "ETL Pipeline {{ $labels.pipeline_id }} has stopped executing"
+          description: "Pipeline {{ $labels.pipeline_id }} has not executed in the last 10 minutes, but was active 1 hour ago"
+          runbook_url: "https://wiki.example.com/runbooks/etl-pipeline-stopped"
+
+      # ===== Performance Alerts =====
+
+      - alert: ETLPipelineSlowExecution
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(etl_pipeline_duration_seconds_bucket[10m])) by (le, pipeline_id)
+          ) > 300
+        for: 10m
+        labels:
+          severity: warning
+          component: etl_pipeline
+        annotations:
+          summary: "ETL Pipeline {{ $labels.pipeline_id }} is executing slowly"
+          description: "Pipeline {{ $labels.pipeline_id }} p95 duration is {{ $value | humanizeDuration }} (threshold: 5 minutes)"
+          runbook_url: "https://wiki.example.com/runbooks/etl-pipeline-slow-execution"
+
+      - alert: ETLPipelineThroughputDrop
+        expr: |
+          (
+            rate(etl_records_loaded_total[5m])
+            <
+            (rate(etl_records_loaded_total[1h] offset 1h) * 0.5)
+          )
+          and
+          (
+            rate(etl_records_loaded_total[1h] offset 1h) > 100
+          )
+        for: 10m
+        labels:
+          severity: warning
+          component: etl_pipeline
+        annotations:
+          summary: "ETL Pipeline {{ $labels.pipeline_id }} throughput dropped significantly"
+          description: "Pipeline {{ $labels.pipeline_id }} throughput is {{ $value | humanize }} records/s, down from {{ query (rate(etl_records_loaded_total[1h] offset 1h)) | humanize }} records/s"
+          runbook_url: "https://wiki.example.com/runbooks/etl-throughput-drop"
+
+      # ===== Data Quality Alerts =====
+
+      - alert: ETLDataQualityHighViolations
+        expr: |
+          (
+            rate(etl_data_quality_violations_total{severity="error"}[5m])
+            /
+            (rate(etl_data_quality_checks_total[5m]) + 0.0001)
+          ) > 0.01
+        for: 5m
+        labels:
+          severity: warning
+          component: data_quality
+        annotations:
+          summary: "Pipeline {{ $labels.pipeline_id }} has high data quality violations"
+          description: "Pipeline {{ $labels.pipeline_id }} error-level violations: {{ $value | humanizePercentage }} (threshold: 1%)"
+          runbook_url: "https://wiki.example.com/runbooks/high-data-quality-violations"
+
+      - alert: ETLDataQualityCriticalViolations
+        expr: |
+          (
+            rate(etl_data_quality_violations_total{severity="error"}[5m])
+            /
+            (rate(etl_data_quality_checks_total[5m]) + 0.0001)
+          ) > 0.10
+        for: 2m
+        labels:
+          severity: critical
+          component: data_quality
+        annotations:
+          summary: "Pipeline {{ $labels.pipeline_id }} has critical data quality violations"
+          description: "Pipeline {{ $labels.pipeline_id }} error-level violations: {{ $value | humanizePercentage }} (threshold: 10%)"
+          runbook_url: "https://wiki.example.com/runbooks/critical-data-quality-violations"
+
+      - alert: ETLSchemaValidationFailures
+        expr: |
+          rate(etl_schema_validation_failures_total[5m]) > 1
+        for: 5m
+        labels:
+          severity: warning
+          component: schema_validation
+        annotations:
+          summary: "Pipeline {{ $labels.pipeline_id }} schema validation failures"
+          description: "Pipeline {{ $labels.pipeline_id }} schema {{ $labels.schema_name }} validation failures: {{ $value | humanize }}/s"
+          runbook_url: "https://wiki.example.com/runbooks/schema-validation-failures"
+
+      # ===== Streaming Alerts =====
+
+      - alert: ETLStreamingHighLag
+        expr: |
+          etl_streaming_lag_seconds > 300
+        for: 5m
+        labels:
+          severity: warning
+          component: streaming
+        annotations:
+          summary: "Streaming query {{ $labels.query_name }} has high lag"
+          description: "Query {{ $labels.query_name }} in pipeline {{ $labels.pipeline_id }} lag: {{ $value | humanizeDuration }} (threshold: 5 minutes)"
+          runbook_url: "https://wiki.example.com/runbooks/streaming-high-lag"
+
+      - alert: ETLStreamingCriticalLag
+        expr: |
+          etl_streaming_lag_seconds > 900
+        for: 2m
+        labels:
+          severity: critical
+          component: streaming
+        annotations:
+          summary: "Streaming query {{ $labels.query_name }} has critical lag"
+          description: "Query {{ $labels.query_name }} in pipeline {{ $labels.pipeline_id }} lag: {{ $value | humanizeDuration }} (threshold: 15 minutes)"
+          runbook_url: "https://wiki.example.com/runbooks/streaming-critical-lag"
+
+      - alert: ETLStreamingNoActiveQueries
+        expr: |
+          etl_streaming_active_queries == 0
+          and
+          (etl_streaming_active_queries offset 1h) > 0
+        for: 10m
+        labels:
+          severity: warning
+          component: streaming
+        annotations:
+          summary: "No active streaming queries detected"
+          description: "All streaming queries have stopped, but were active 1 hour ago"
+          runbook_url: "https://wiki.example.com/runbooks/streaming-no-active-queries"
+
+      - alert: ETLStreamingBatchProcessingFailures
+        expr: |
+          (
+            rate(etl_streaming_batches_processed_total{status="failure"}[5m])
+            /
+            (rate(etl_streaming_batches_processed_total[5m]) + 0.0001)
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          component: streaming
+        annotations:
+          summary: "Streaming query {{ $labels.query_name }} batch failures"
+          description: "Query {{ $labels.query_name }} batch failure rate: {{ $value | humanizePercentage }} (threshold: 5%)"
+          runbook_url: "https://wiki.example.com/runbooks/streaming-batch-failures"
+
+      # ===== Error Handling Alerts =====
+
+      - alert: ETLCircuitBreakerOpen
+        expr: |
+          etl_circuit_breaker_state == 2
+        for: 1m
+        labels:
+          severity: warning
+          component: error_handling
+        annotations:
+          summary: "Circuit breaker open for {{ $labels.component }}"
+          description: "Circuit breaker for {{ $labels.component }} in pipeline {{ $labels.pipeline_id }} is OPEN (requests blocked)"
+          runbook_url: "https://wiki.example.com/runbooks/circuit-breaker-open"
+
+      - alert: ETLHighRetryRate
+        expr: |
+          rate(etl_retries_total[5m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+          component: error_handling
+        annotations:
+          summary: "High retry rate for pipeline {{ $labels.pipeline_id }}"
+          description: "Pipeline {{ $labels.pipeline_id }} {{ $labels.stage }} retry rate: {{ $value | humanize }}/s (threshold: 10/s)"
+          runbook_url: "https://wiki.example.com/runbooks/high-retry-rate"
+
+      - alert: ETLDeadLetterQueueBacklog
+        expr: |
+          rate(etl_dlq_records_total[5m]) > 50
+        for: 5m
+        labels:
+          severity: warning
+          component: dlq
+        annotations:
+          summary: "High DLQ rate for pipeline {{ $labels.pipeline_id }}"
+          description: "Pipeline {{ $labels.pipeline_id }} DLQ rate: {{ $value | humanize }} records/s (threshold: 50/s)"
+          runbook_url: "https://wiki.example.com/runbooks/dlq-backlog"
+
+      # ===== Resource Alerts =====
+
+      - alert: ETLSparkExecutorsLow
+        expr: |
+          etl_spark_executors < 2
+        for: 5m
+        labels:
+          severity: warning
+          component: spark
+        annotations:
+          summary: "Low number of Spark executors"
+          description: "Only {{ $value }} Spark executor(s) active (expected: >= 2)"
+          runbook_url: "https://wiki.example.com/runbooks/spark-executors-low"
+
+      - alert: ETLSparkNoExecutors
+        expr: |
+          etl_spark_executors == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: spark
+        annotations:
+          summary: "No Spark executors available"
+          description: "Spark has no active executors - all processing will fail"
+          runbook_url: "https://wiki.example.com/runbooks/spark-no-executors"
+
+      # ===== Batch Tracker Alerts =====
+
+      - alert: ETLBatchTrackerTableLarge
+        expr: |
+          etl_batch_tracker_records > 1000000
+        for: 1h
+        labels:
+          severity: info
+          component: batch_tracker
+        annotations:
+          summary: "Batch tracker table is large for pipeline {{ $labels.pipeline_id }}"
+          description: "Pipeline {{ $labels.pipeline_id }} batch tracker has {{ $value }} records. Consider running cleanup job."
+          runbook_url: "https://wiki.example.com/runbooks/batch-tracker-cleanup"
+
+      - alert: ETLFrequentDuplicateBatches
+        expr: |
+          rate(etl_streaming_duplicate_batches_total[5m]) > 0.1
+        for: 10m
+        labels:
+          severity: info
+          component: streaming
+        annotations:
+          summary: "Frequent duplicate batches detected for {{ $labels.query_name }}"
+          description: "Query {{ $labels.query_name }} detecting duplicate batches at {{ $value | humanize }}/s. May indicate checkpoint/recovery issues."
+          runbook_url: "https://wiki.example.com/runbooks/frequent-duplicate-batches"
