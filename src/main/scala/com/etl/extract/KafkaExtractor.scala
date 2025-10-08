@@ -1,7 +1,8 @@
 package com.etl.extract
 
-import com.etl.config.ExtractConfig
+import com.etl.config.{CredentialVault, ExtractConfig}
 import com.etl.streaming.StreamingConfig
+import com.etl.util.CredentialHelper
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.slf4j.LoggerFactory
 
@@ -17,6 +18,11 @@ import org.slf4j.LoggerFactory
  * - maxOffsetsPerTrigger (optional): Rate limit for streaming
  * - kafka.* (optional): Additional Kafka consumer properties
  *
+ * Credential Management (SASL authentication):
+ * - Preferred: Set credentialId in ExtractConfig, store username/password in vault
+ * - Fallback: Set kafka.sasl.jaas.config in connectionParams (plain-text, not recommended)
+ * - Vault should contain {credentialId}.username and {credentialId}.password
+ *
  * Streaming enhancements:
  * - Supports watermarking for event-time processing (pass streamingConfig)
  * - Watermark enables handling of late-arriving data
@@ -27,7 +33,7 @@ class KafkaExtractor(
 ) extends Extractor {
   private val logger = LoggerFactory.getLogger(getClass)
 
-  override def extract(config: ExtractConfig)(implicit spark: SparkSession): DataFrame = {
+  override def extractWithVault(config: ExtractConfig, vault: CredentialVault)(implicit spark: SparkSession): DataFrame = {
     logger.info(s"Extracting from Kafka with config: ${config.connectionParams}")
 
     // Validate required parameters
@@ -78,9 +84,33 @@ class KafkaExtractor(
       configuredReader = configuredReader.option("maxOffsetsPerTrigger", limit)
     }
 
-    // Apply any additional kafka.* parameters
+    // Apply SASL credentials if configured
+    val saslConfig = CredentialHelper.getKafkaSaslConfig(
+      config.connectionParams,
+      config.credentialId,
+      vault
+    )
+
+    saslConfig.foreach { jaas =>
+      configuredReader = configuredReader.option("kafka.sasl.jaas.config", jaas)
+
+      // Also set security protocol and mechanism if not already present
+      if (!config.connectionParams.contains("kafka.security.protocol")) {
+        configuredReader = configuredReader.option("kafka.security.protocol", "SASL_SSL")
+      }
+
+      if (!config.connectionParams.contains("kafka.sasl.mechanism")) {
+        configuredReader = configuredReader.option("kafka.sasl.mechanism", "PLAIN")
+      }
+
+      logger.debug("SASL authentication configured for Kafka connection")
+    }
+
+    // Apply any additional kafka.* parameters (except SASL which was handled above)
     config.connectionParams.foreach {
-      case (key, value) if key.startsWith("kafka.") && key != "kafka.bootstrap.servers" =>
+      case (key, value) if key.startsWith("kafka.") &&
+                          key != "kafka.bootstrap.servers" &&
+                          key != "kafka.sasl.jaas.config" =>
         configuredReader = configuredReader.option(key, value)
       case _ => // Skip non-kafka parameters
     }
@@ -122,5 +152,18 @@ class KafkaExtractor(
     )
 
     df
+  }
+
+  /**
+   * Legacy extract method for backward compatibility.
+   * Delegates to extractWithVault with empty vault.
+   */
+  override def extract(config: ExtractConfig)(implicit spark: SparkSession): DataFrame = {
+    logger.warn("Using legacy extract() without vault. Consider using extractWithVault() for secure SASL credentials.")
+
+    // Create empty vault for backward compatibility
+    val tempVault = com.etl.config.InMemoryVault()
+
+    extractWithVault(config, tempVault)(spark)
   }
 }

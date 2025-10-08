@@ -1,6 +1,6 @@
 package com.etl.load
 
-import com.etl.config.LoadConfig
+import com.etl.config.{CredentialVault, LoadConfig}
 import com.etl.model.{LoadResult, WriteMode}
 import org.apache.spark.sql.DataFrame
 
@@ -39,4 +39,19 @@ trait Loader {
    * @throws Exception if load fails (connection error, permission denied, etc.)
    */
   def load(df: DataFrame, config: LoadConfig, mode: WriteMode): LoadResult
+
+  /**
+   * Load DataFrame to configured sink with vault access.
+   * This method provides access to CredentialVault for secure credential retrieval.
+   * Default implementation delegates to load() for backward compatibility.
+   *
+   * @param df DataFrame to write
+   * @param config Load configuration
+   * @param mode Write mode
+   * @param vault Credential vault for secure credential access
+   * @return LoadResult with record counts and any errors
+   */
+  def loadWithVault(df: DataFrame, config: LoadConfig, mode: WriteMode, vault: CredentialVault): LoadResult = {
+    load(df, config, mode)
+  }
 }

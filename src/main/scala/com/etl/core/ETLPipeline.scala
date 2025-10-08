@@ -131,10 +131,11 @@ case class ETLPipeline(
         val loadResult = withMDC(context.getMDCContext ++ Map("stage" -> "load")) {
           logger.info(s"Stage 3: Loading data with mode: ${context.config.load.writeMode}")
 
-          val result = loader.load(
+          val result = loader.loadWithVault(
             transformedDf,
             context.config.load,
-            context.config.load.writeMode
+            context.config.load.writeMode,
+            context.vault
           )
 
           logger.info(
