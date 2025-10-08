@@ -162,11 +162,21 @@ class PostgreSQLLoader(
       s"Starting streaming write to PostgreSQL: " +
         s"query=${cfg.queryName}, " +
         s"outputMode=${cfg.outputMode.value}, " +
-        s"trigger=${cfg.triggerMode}"
+        s"trigger=${cfg.triggerMode}, " +
+        s"exactlyOnce=${cfg.enableIdempotence}"
     )
 
     // Create checkpoint location
     val checkpointLoc = s"${cfg.checkpointLocation}/postgresql-$table"
+
+    // Create batch tracker for exactly-once semantics (if enabled)
+    val batchTracker: Option[com.etl.streaming.BatchTracker] = if (cfg.enableIdempotence) {
+      logger.info(s"Enabling exactly-once semantics with BatchTracker for pipeline ${cfg.queryName}")
+      Some(com.etl.streaming.BatchTracker.fromLoadConfig(config, cfg.queryName))
+    } else {
+      logger.info("Exactly-once semantics disabled (enableIdempotence=false)")
+      None
+    }
 
     // Build streaming writer
     var writer = df.writeStream
@@ -190,45 +200,77 @@ class PostgreSQLLoader(
     val query = writer.foreachBatch { (batchDf: DataFrame, batchId: Long) =>
       logger.info(s"Processing batch $batchId with ${batchDf.count()} records")
 
-      val result = errorHandlingContext match {
-        case Some(ctx) =>
-          ctx.execute {
-            executeLoad(batchDf, jdbcUrl, table, user, config, mode)
-          }
-        case None =>
-          Try(executeLoad(batchDf, jdbcUrl, table, user, config, mode)).toEither
-      }
+      // Check if batch was already processed (exactly-once)
+      val alreadyProcessed = batchTracker.exists(_.isBatchProcessed(batchId))
 
-      result match {
-        case Right(_) =>
-          logger.info(s"Batch $batchId written successfully to PostgreSQL")
-        case Left(error) =>
-          logger.error(s"Batch $batchId failed: ${error.getMessage}", error)
+      if (alreadyProcessed) {
+        logger.info(
+          s"Batch $batchId already processed for pipeline ${cfg.queryName}, " +
+            "skipping (exactly-once semantics)"
+        )
+      } else {
+        // Execute write with optional exactly-once tracking
+        val result = batchTracker match {
+          case Some(tracker) =>
+            // Exactly-once: wrap in transaction with batch tracking
+            Try {
+              tracker.withTransaction { conn =>
+                // Execute the load using the transaction connection
+                executeLoadWithConnection(batchDf, conn, table, config, mode)
 
-          // Publish failed batch to DLQ
-          val context = Map(
-            "pipelineId" -> config.sinkType.toString,
-            "stage" -> "load",
-            "table" -> table,
-            "mode" -> mode.toString,
-            "batchId" -> batchId.toString
-          )
+                // Mark batch as processed within same transaction
+                tracker.markBatchProcessed(
+                  batchId = batchId,
+                  recordCount = batchDf.count(),
+                  connection = conn,
+                  checkpointLocation = Some(checkpointLoc)
+                )
+              }
+            }.toEither
 
-          Try {
-            batchDf.collect().foreach { row =>
-              dlq.publish(row, error, context)
+          case None =>
+            // Normal processing (at-least-once semantics)
+            errorHandlingContext match {
+              case Some(ctx) =>
+                ctx.execute {
+                  executeLoad(batchDf, jdbcUrl, table, user, config, mode)
+                }
+              case None =>
+                Try(executeLoad(batchDf, jdbcUrl, table, user, config, mode)).toEither
             }
-          } match {
-            case Success(_) =>
-              logger.info(s"Published failed batch $batchId to DLQ")
-            case Failure(dlqError) =>
-              logger.error(s"Failed to publish batch $batchId to DLQ: ${dlqError.getMessage}", dlqError)
-          }
+        }
 
-          // Re-throw to fail the streaming query if failFast is enabled
-          if (errorHandlingContext.exists(_.config.failFast)) {
-            throw error
-          }
+        result match {
+          case Right(_) =>
+            logger.info(s"Batch $batchId written successfully to PostgreSQL")
+          case Left(error) =>
+            logger.error(s"Batch $batchId failed: ${error.getMessage}", error)
+
+            // Publish failed batch to DLQ
+            val context = Map(
+              "pipelineId" -> cfg.queryName,
+              "stage" -> "load",
+              "table" -> table,
+              "mode" -> mode.toString,
+              "batchId" -> batchId.toString
+            )
+
+            Try {
+              batchDf.collect().foreach { row =>
+                dlq.publish(row, error, context)
+              }
+            } match {
+              case Success(_) =>
+                logger.info(s"Published failed batch $batchId to DLQ")
+              case Failure(dlqError) =>
+                logger.error(s"Failed to publish batch $batchId to DLQ: ${dlqError.getMessage}", dlqError)
+            }
+
+            // Re-throw to fail the streaming query if failFast is enabled
+            if (errorHandlingContext.exists(_.config.failFast)) {
+              throw error
+            }
+        }
       }
     }.start()
 
@@ -240,6 +282,35 @@ class PostgreSQLLoader(
     // For streaming, we return success immediately as the query runs asynchronously
     // Actual record counts will be tracked per batch
     LoadResult.success(0L)
+  }
+
+  /**
+   * Execute load with explicit connection (for transactional exactly-once semantics).
+   *
+   * @param df DataFrame to load
+   * @param connection Active JDBC connection (should be in transaction)
+   * @param table Target table name
+   * @param config Load configuration
+   * @param mode Write mode (Append, Overwrite, Upsert)
+   */
+  private def executeLoadWithConnection(
+    df: DataFrame,
+    connection: Connection,
+    table: String,
+    config: LoadConfig,
+    mode: WriteMode
+  ): Unit = {
+    mode match {
+      case WriteMode.Append =>
+        writeJdbcWithConnection(df, connection, table, config, SaveMode.Append)
+
+      case WriteMode.Overwrite =>
+        writeJdbcWithConnection(df, connection, table, config, SaveMode.Overwrite)
+
+      case WriteMode.Upsert =>
+        // Upsert with provided connection (already in transaction)
+        performUpsertWithConnection(df, connection, table, config)
+    }
   }
 
   private def executeLoad(
@@ -260,6 +331,73 @@ class PostgreSQLLoader(
       case WriteMode.Upsert =>
         // Upsert requires custom logic with temp table
         performUpsert(df, jdbcUrl, table, user, config)
+    }
+  }
+
+  /**
+   * Write DataFrame using existing connection (for transactional writes).
+   */
+  private def writeJdbcWithConnection(
+    df: DataFrame,
+    connection: Connection,
+    table: String,
+    config: LoadConfig,
+    saveMode: SaveMode
+  ): Unit = {
+    val statement = connection.createStatement()
+    try {
+      // For simplicity, we use JDBC batch insert via prepared statement
+      // This is more efficient than Spark's JDBC writer for small batches
+
+      val columns = df.schema.fieldNames
+      val columnList = columns.map(c => s"\"$c\"").mkString(", ")
+      val placeholders = columns.map(_ => "?").mkString(", ")
+
+      // Handle SaveMode
+      saveMode match {
+        case SaveMode.Overwrite =>
+          // Truncate table first
+          statement.execute(s"TRUNCATE TABLE \"$table\"")
+          logger.info(s"Truncated table $table for Overwrite mode")
+        case _ => // Append - no action needed
+      }
+
+      val insertSql = s"""INSERT INTO "$table" ($columnList) VALUES ($placeholders)"""
+      val preparedStatement = connection.prepareStatement(insertSql)
+
+      try {
+        val batchSize = config.connectionParams.get("batchsize").map(_.toInt).getOrElse(1000)
+        var count = 0
+
+        df.collect().foreach { row =>
+          columns.zipWithIndex.foreach { case (col, idx) =>
+            val value = row.get(idx)
+            if (value == null) {
+              preparedStatement.setNull(idx + 1, java.sql.Types.NULL)
+            } else {
+              preparedStatement.setObject(idx + 1, value)
+            }
+          }
+          preparedStatement.addBatch()
+          count += 1
+
+          if (count % batchSize == 0) {
+            preparedStatement.executeBatch()
+            logger.debug(s"Executed batch of $batchSize records")
+          }
+        }
+
+        // Execute remaining records
+        if (count % batchSize != 0) {
+          preparedStatement.executeBatch()
+        }
+
+        logger.info(s"Inserted $count records into $table using connection")
+      } finally {
+        preparedStatement.close()
+      }
+    } finally {
+      statement.close()
     }
   }
 
@@ -297,6 +435,115 @@ class PostgreSQLLoader(
     }
 
     writer.save()
+  }
+
+  /**
+   * Perform upsert using existing connection (for transactional writes).
+   */
+  private def performUpsertWithConnection(
+    df: DataFrame,
+    connection: Connection,
+    table: String,
+    config: LoadConfig
+  ): Unit = {
+    // Get primary key columns for upsert
+    val primaryKey = config.connectionParams.getOrElse(
+      "primaryKey",
+      throw new IllegalArgumentException(
+        "primaryKey parameter is required for Upsert mode in PostgreSQL"
+      )
+    )
+
+    val pkColumns = primaryKey.split(",").map(_.trim)
+
+    logger.info(s"Performing upsert with primary key: ${pkColumns.mkString(", ")}")
+
+    // For PostgreSQL upsert with existing connection:
+    // 1. Create temp table
+    // 2. Insert data into temp table
+    // 3. Execute UPSERT from temp table to target table
+    // 4. Drop temp table
+    // All within the provided transaction
+
+    val tempTable = s"${table}_temp_${System.currentTimeMillis()}"
+    val statement = connection.createStatement()
+
+    try {
+      // Create temp table with same schema as target
+      val columns = df.schema.fieldNames
+      val columnDefs = df.schema.fields.map { field =>
+        val sqlType = field.dataType.sql
+        s"\"${field.name}\" $sqlType"
+      }.mkString(", ")
+
+      val createTempSql = s"CREATE TEMP TABLE \"$tempTable\" ($columnDefs)"
+      statement.execute(createTempSql)
+      logger.info(s"Created temp table: $tempTable")
+
+      // Insert data into temp table
+      val columnList = columns.map(c => s"\"$c\"").mkString(", ")
+      val placeholders = columns.map(_ => "?").mkString(", ")
+      val insertSql = s"""INSERT INTO "$tempTable" ($columnList) VALUES ($placeholders)"""
+      val preparedStatement = connection.prepareStatement(insertSql)
+
+      try {
+        val batchSize = config.connectionParams.get("batchsize").map(_.toInt).getOrElse(1000)
+        var count = 0
+
+        df.collect().foreach { row =>
+          columns.zipWithIndex.foreach { case (col, idx) =>
+            val value = row.get(idx)
+            if (value == null) {
+              preparedStatement.setNull(idx + 1, java.sql.Types.NULL)
+            } else {
+              preparedStatement.setObject(idx + 1, value)
+            }
+          }
+          preparedStatement.addBatch()
+          count += 1
+
+          if (count % batchSize == 0) {
+            preparedStatement.executeBatch()
+          }
+        }
+
+        // Execute remaining records
+        if (count % batchSize != 0) {
+          preparedStatement.executeBatch()
+        }
+
+        logger.info(s"Inserted $count records into temp table")
+      } finally {
+        preparedStatement.close()
+      }
+
+      // Build and execute UPSERT query
+      val setClause = columns.filter(c => !pkColumns.contains(c))
+        .map(c => s"\"$c\" = EXCLUDED.\"$c\"")
+        .mkString(", ")
+
+      val conflictColumns = pkColumns.map(c => s"\"$c\"").mkString(", ")
+
+      val upsertSql = s"""
+        INSERT INTO "$table" ($columnList)
+        SELECT $columnList FROM "$tempTable"
+        ON CONFLICT ($conflictColumns)
+        DO UPDATE SET $setClause
+      """.trim
+
+      logger.info(s"Executing upsert SQL: $upsertSql")
+
+      val rowsAffected = statement.executeUpdate(upsertSql)
+      logger.info(s"Upsert affected $rowsAffected rows")
+
+      // Drop temp table
+      val dropSql = s"DROP TABLE IF EXISTS \"$tempTable\""
+      statement.execute(dropSql)
+      logger.info(s"Dropped temp table: $tempTable")
+
+    } finally {
+      statement.close()
+    }
   }
 
   private def performUpsert(
