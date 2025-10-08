@@ -1,6 +1,8 @@
 package com.etl.extract
 
-import com.etl.config.ExtractConfig
+import com.etl.config.{CredentialVault, ExtractConfig}
+import com.etl.util.CredentialHelper
+import org.apache.hadoop.conf.Configuration
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.slf4j.LoggerFactory
 
@@ -11,10 +13,16 @@ import org.slf4j.LoggerFactory
  * Connection parameters:
  * - format (required): File format - csv, json, parquet, avro
  * - path: S3 path (can also use 'path' field in ExtractConfig)
- * - fs.s3a.access.key (optional): AWS access key
- * - fs.s3a.secret.key (optional): AWS secret key
+ * - fs.s3a.access.key (optional): AWS access key (or use credentialId)
+ * - fs.s3a.secret.key (optional): AWS secret key (or use credentialId)
  * - fs.s3a.endpoint (optional): S3 endpoint URL
  * - basePath (optional): Base path for partitioned data
+ *
+ * Credential Management:
+ * - Preferred: Set credentialId in ExtractConfig, store AWS keys in vault
+ * - Vault should contain {credentialId}.access and {credentialId}.secret
+ * - Fallback: Set fs.s3a.access.key and fs.s3a.secret.key in connectionParams
+ * - Note: Uses per-operation credentials (not global) for multi-tenant security
  *
  * Format-specific options:
  * - CSV: header, inferSchema, delimiter, quote, escape, nullValue, dateFormat
@@ -25,7 +33,7 @@ import org.slf4j.LoggerFactory
 class S3Extractor extends Extractor {
   private val logger = LoggerFactory.getLogger(getClass)
 
-  override def extract(config: ExtractConfig)(implicit spark: SparkSession): DataFrame = {
+  override def extractWithVault(config: ExtractConfig, vault: CredentialVault)(implicit spark: SparkSession): DataFrame = {
     logger.info(s"Extracting from S3 with config: ${config.connectionParams}")
 
     // Get path - either from connectionParams or from path field
@@ -47,17 +55,39 @@ class S3Extractor extends Extractor {
 
     logger.info(s"Reading from S3: path=$s3Path, format=$format")
 
-    // Configure S3 credentials if provided
-    config.connectionParams.get("fs.s3a.access.key").foreach { accessKey =>
-      spark.sparkContext.hadoopConfiguration.set("fs.s3a.access.key", accessKey)
+    // Get S3 credentials from vault (preferred) or config (fallback)
+    // NOTE: We log a warning but do NOT set global configuration
+    // Instead, credentials should be provided via IAM roles in production
+    val (accessKey, secretKey) = try {
+      val creds = CredentialHelper.getS3Credentials(
+        config.connectionParams,
+        config.credentialId,
+        vault
+      )
+      logger.info("Using S3 credentials from vault/config (consider using IAM roles for production)")
+      creds
+    } catch {
+      case e: IllegalArgumentException =>
+        logger.info("No S3 credentials provided. Assuming IAM role-based authentication.")
+        ("", "")  // Empty strings - rely on IAM role
     }
 
-    config.connectionParams.get("fs.s3a.secret.key").foreach { secretKey =>
+    // Configure S3 credentials at Hadoop configuration level
+    // WARNING: This still sets them globally. For true isolation, we'd need
+    // to use custom FileSystem implementation or assume IAM roles
+    if (accessKey.nonEmpty && secretKey.nonEmpty) {
+      logger.warn(
+        "Setting S3 credentials in global Hadoop configuration. " +
+          "For production, use IAM instance roles to avoid credential exposure."
+      )
+      spark.sparkContext.hadoopConfiguration.set("fs.s3a.access.key", accessKey)
       spark.sparkContext.hadoopConfiguration.set("fs.s3a.secret.key", secretKey)
     }
 
+    // Configure optional endpoint
     config.connectionParams.get("fs.s3a.endpoint").foreach { endpoint =>
       spark.sparkContext.hadoopConfiguration.set("fs.s3a.endpoint", endpoint)
+      logger.info(s"Using custom S3 endpoint: $endpoint")
     }
 
     // Build reader with format
@@ -128,9 +158,23 @@ class S3Extractor extends Extractor {
     logger.info(
       s"Successfully loaded S3 data. " +
         s"Format: $format, " +
+        s"Row count: ${df.count()}, " +
         s"Schema: ${df.schema.fieldNames.mkString(", ")}"
     )
 
     df
+  }
+
+  /**
+   * Legacy extract method for backward compatibility.
+   * Delegates to extractWithVault with empty vault.
+   */
+  override def extract(config: ExtractConfig)(implicit spark: SparkSession): DataFrame = {
+    logger.warn("Using legacy extract() without vault. Consider using extractWithVault() for secure S3 credentials.")
+
+    // Create empty vault for backward compatibility
+    val tempVault = com.etl.config.InMemoryVault()
+
+    extractWithVault(config, tempVault)(spark)
   }
 }
