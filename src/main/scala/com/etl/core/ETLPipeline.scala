@@ -3,6 +3,7 @@ package com.etl.core
 import com.etl.extract.Extractor
 import com.etl.load.Loader
 import com.etl.model.{PipelineFailure, PipelineResult, PipelineSuccess}
+import com.etl.monitoring.ETLMetrics
 import com.etl.quality.{DataQualityRuleFactory, DataQualityValidator, OnFailureAction}
 import com.etl.transform.Transformer
 import com.etl.util.Logging
@@ -44,11 +45,23 @@ case class ETLPipeline(
           s"Transformers: ${transformers.size}"
       )
 
+      val pipelineLabels = Map("pipeline_id" -> context.config.pipelineId)
+      val pipelineMode = if (context.config.mode.toString == "Streaming") "streaming" else "batch"
+
+      // Track active pipelines
+      ETLMetrics.activePipelines.inc(labels = Map("mode" -> pipelineMode))
+
+      val startTime = System.nanoTime()
+
       try {
         // Stage 1: Extract
         val extractedDf = withMDC(context.getMDCContext ++ Map("stage" -> "extract")) {
           logger.info("Stage 1: Extracting data")
+
+          val extractStart = System.nanoTime()
           val df = extractor.extractWithVault(context.config.extract, context.vault)(context.spark)
+          val extractDuration = (System.nanoTime() - extractStart) / 1e9
+
           val recordCount = df.count()
 
           logger.info(
@@ -60,6 +73,12 @@ case class ETLPipeline(
           // Update metrics
           val updatedMetrics = context.metrics.copy(recordsExtracted = recordCount)
           context.updateMetrics(updatedMetrics)
+
+          // Update Prometheus metrics
+          val extractLabels = pipelineLabels ++ Map("source_type" -> context.config.extract.sourceType.toString)
+          ETLMetrics.recordsExtractedTotal.inc(recordCount.toDouble, extractLabels)
+          ETLMetrics.extractDurationSeconds.observe(extractDuration, extractLabels)
+          ETLMetrics.recordBatchSize.observe(recordCount.toDouble, pipelineLabels ++ Map("stage" -> "extract"))
 
           df
         }
@@ -81,6 +100,8 @@ case class ETLPipeline(
           withMDC(context.getMDCContext ++ Map("stage" -> "transform")) {
             logger.info(s"Stage 2: Applying ${transformers.size} transformer(s)")
 
+            val transformStart = System.nanoTime()
+
             val finalDf = transformers.zipWithIndex.foldLeft(extractedDf) {
               case (df, (transformer, index)) =>
                 logger.info(s"Applying transformer ${index + 1}/${transformers.size}")
@@ -94,10 +115,21 @@ case class ETLPipeline(
                     )
                   )
                 }
-                transformer.transform(df, transformConfig)
+
+                val txStart = System.nanoTime()
+                val result = transformer.transform(df, transformConfig)
+                val txDuration = (System.nanoTime() - txStart) / 1e9
+
+                // Track per-transformer metrics
+                val transformLabels = pipelineLabels ++ Map("transform_type" -> transformConfig.transformType.toString)
+                ETLMetrics.transformDurationSeconds.observe(txDuration, transformLabels)
+
+                result
             }
 
+            val transformDuration = (System.nanoTime() - transformStart) / 1e9
             val recordCount = finalDf.count()
+
             logger.info(
               s"Transformation complete. " +
                 s"Records after transform: $recordCount, " +
@@ -107,6 +139,10 @@ case class ETLPipeline(
             // Update metrics
             val updatedMetrics = context.metrics.copy(recordsTransformed = recordCount)
             context.updateMetrics(updatedMetrics)
+
+            // Update Prometheus metrics
+            ETLMetrics.recordsTransformedTotal.inc(recordCount.toDouble, pipelineLabels ++ Map("transform_type" -> "all"))
+            ETLMetrics.recordBatchSize.observe(recordCount.toDouble, pipelineLabels ++ Map("stage" -> "transform"))
 
             finalDf
           }
@@ -131,18 +167,35 @@ case class ETLPipeline(
         val loadResult = withMDC(context.getMDCContext ++ Map("stage" -> "load")) {
           logger.info(s"Stage 3: Loading data with mode: ${context.config.load.writeMode}")
 
+          val loadStart = System.nanoTime()
           val result = loader.loadWithVault(
             transformedDf,
             context.config.load,
             context.config.load.writeMode,
             context.vault
           )
+          val loadDuration = (System.nanoTime() - loadStart) / 1e9
 
           logger.info(
             s"Load complete. " +
               s"Records loaded: ${result.recordsLoaded}, " +
               s"Records failed: ${result.recordsFailed}"
           )
+
+          // Update Prometheus metrics
+          val loadLabels = pipelineLabels ++ Map(
+            "sink_type" -> context.config.load.sinkType.toString,
+            "write_mode" -> context.config.load.writeMode.toString
+          )
+          ETLMetrics.recordsLoadedTotal.inc(result.recordsLoaded.toDouble, loadLabels)
+          ETLMetrics.loadDurationSeconds.observe(loadDuration, loadLabels)
+
+          if (result.recordsFailed > 0) {
+            ETLMetrics.recordsFailedTotal.inc(
+              result.recordsFailed.toDouble,
+              pipelineLabels ++ Map("stage" -> "load", "reason" -> "load_error")
+            )
+          }
 
           result
         }
@@ -156,6 +209,12 @@ case class ETLPipeline(
 
         context.updateMetrics(finalMetrics)
 
+        // Calculate total pipeline duration
+        val pipelineDuration = (System.nanoTime() - startTime) / 1e9
+
+        // Track active pipelines (decrement)
+        ETLMetrics.activePipelines.dec(labels = Map("mode" -> pipelineMode))
+
         // Return result
         if (loadResult.isSuccess) {
           logger.info(
@@ -163,12 +222,22 @@ case class ETLPipeline(
               s"Duration: ${finalMetrics.duration}ms, " +
               s"Success rate: ${finalMetrics.successRate}%"
           )
+
+          // Update Prometheus metrics for successful execution
+          ETLMetrics.pipelineExecutionsTotal.inc(labels = pipelineLabels ++ Map("status" -> "success"))
+          ETLMetrics.pipelineDurationSeconds.observe(pipelineDuration, pipelineLabels ++ Map("status" -> "success"))
+
           PipelineSuccess(finalMetrics)
         } else {
           val error = new RuntimeException(
             s"Load stage failed: ${loadResult.errors.mkString(", ")}"
           )
           logger.error(s"ETL pipeline failed at load stage", Some(error))
+
+          // Update Prometheus metrics for failed execution
+          ETLMetrics.pipelineExecutionsTotal.inc(labels = pipelineLabels ++ Map("status" -> "failure"))
+          ETLMetrics.pipelineDurationSeconds.observe(pipelineDuration, pipelineLabels ++ Map("status" -> "failure"))
+
           PipelineFailure(finalMetrics, error)
         }
 
@@ -181,6 +250,20 @@ case class ETLPipeline(
             .complete()
 
           context.updateMetrics(failedMetrics)
+
+          // Calculate pipeline duration even for failures
+          val pipelineDuration = (System.nanoTime() - startTime) / 1e9
+
+          // Track active pipelines (decrement)
+          ETLMetrics.activePipelines.dec(labels = Map("mode" -> pipelineMode))
+
+          // Update Prometheus metrics for exception
+          ETLMetrics.pipelineExecutionsTotal.inc(labels = pipelineLabels ++ Map("status" -> "exception"))
+          ETLMetrics.pipelineDurationSeconds.observe(pipelineDuration, pipelineLabels ++ Map("status" -> "exception"))
+          ETLMetrics.recordsFailedTotal.inc(
+            context.metrics.recordsExtracted.toDouble,
+            pipelineLabels ++ Map("stage" -> "pipeline", "reason" -> e.getClass.getSimpleName)
+          )
 
           PipelineFailure(failedMetrics, e)
       }
@@ -220,6 +303,27 @@ case class ETLPipeline(
 
       // Log report
       logger.info(s"Data quality validation completed for $stage stage: ${report.summary}")
+
+      // Update Prometheus metrics for data quality checks
+      val pipelineLabels = Map("pipeline_id" -> context.config.pipelineId)
+
+      report.results.foreach { result =>
+        val checkLabels = pipelineLabels ++ Map(
+          "rule_type" -> result.rule.ruleType.toString,
+          "severity" -> result.rule.severity.toString,
+          "status" -> (if (result.passed) "passed" else "failed")
+        )
+
+        ETLMetrics.dataQualityChecksTotal.inc(labels = checkLabels)
+
+        if (!result.passed) {
+          val violationLabels = pipelineLabels ++ Map(
+            "rule_name" -> result.rule.name,
+            "severity" -> result.rule.severity.toString
+          )
+          ETLMetrics.dataQualityViolationsTotal.inc(labels = violationLabels)
+        }
+      }
 
       // Log failed rules
       report.failures.foreach { result =>
