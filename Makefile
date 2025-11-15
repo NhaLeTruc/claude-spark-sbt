@@ -176,6 +176,37 @@ release: clean check coverage assembly ## Prepare release
 	@echo "  - JAR: target/scala-2.12/claude-spark-etl-1.0.0.jar"
 	@echo "  - Coverage: target/scala-2.12/scoverage-report/index.html"
 
+##@ Benchmarking
+
+benchmark: ## Run all JMH benchmarks
+	@echo "${CYAN}Running all JMH benchmarks...${NC}"
+	@sbt "Jmh/run -i 10 -wi 5 -f 1"
+
+benchmark-quick: ## Run quick benchmarks (fewer iterations)
+	@echo "${CYAN}Running quick benchmarks...${NC}"
+	@sbt "Jmh/run -i 3 -wi 2 -f 1"
+
+benchmark-pipeline: ## Run ETL pipeline benchmarks
+	@echo "${CYAN}Running ETL pipeline benchmarks...${NC}"
+	@sbt "Jmh/run -i 10 -wi 5 -f 1 ETLPipelineBenchmark"
+
+benchmark-retry: ## Run retry and circuit breaker benchmarks
+	@echo "${CYAN}Running retry/circuit breaker benchmarks...${NC}"
+	@sbt "Jmh/run -i 10 -wi 5 -f 1 RetryCircuitBreakerBenchmark"
+
+benchmark-profile: ## Run benchmarks with GC profiling
+	@echo "${CYAN}Running benchmarks with GC profiling...${NC}"
+	@sbt "Jmh/run -i 10 -wi 5 -f 1 -prof gc"
+
+benchmark-list: ## List all available benchmarks
+	@echo "${CYAN}Available benchmarks:${NC}"
+	@sbt "Jmh/run -l"
+
+benchmark-report: ## Run benchmarks and generate CSV report
+	@echo "${CYAN}Running benchmarks and generating report...${NC}"
+	@sbt "Jmh/run -i 10 -wi 5 -f 1 -rf csv -rff benchmark-results.csv"
+	@echo "${GREEN}Report saved to: benchmark-results.csv${NC}"
+
 ##@ Utilities
 
 console: ## Start Scala console with project classpath

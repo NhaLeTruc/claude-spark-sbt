@@ -4,6 +4,9 @@ version := "1.0.0"
 
 scalaVersion := "2.12.18"
 
+// Enable JMH plugin
+enablePlugins(JmhPlugin)
+
 javacOptions ++= Seq("-source", "11", "-target", "11")
 
 libraryDependencies ++= Seq(
@@ -37,6 +40,11 @@ libraryDependencies ++= Seq(
   // Logging
   "ch.qos.logback" % "logback-classic" % "1.4.14",
   "net.logstash.logback" % "logstash-logback-encoder" % "7.4",
+
+  // Metrics
+  "io.prometheus" % "simpleclient" % "0.16.0",
+  "io.prometheus" % "simpleclient_pushgateway" % "0.16.0",
+  "io.prometheus" % "simpleclient_httpserver" % "0.16.0",
 
   // Testing
   "org.scalatest" %% "scalatest" % "3.2.17" % Test,
@@ -81,3 +89,10 @@ coverageMinimumBranchTotal := 75
 coverageFailOnMinimum := true
 coverageHighlighting := true
 coverageExcludedPackages := "<empty>;.*BuildInfo.*"
+
+// JMH benchmark settings
+Jmh / sourceDirectory := (Test / sourceDirectory).value
+Jmh / classDirectory := (Test / classDirectory).value
+Jmh / dependencyClasspath := (Test / dependencyClasspath).value
+Jmh / compile := (Jmh / compile).dependsOn(Test / compile).value
+Jmh / run := (Jmh / run).dependsOn(Jmh / compile).evaluated
