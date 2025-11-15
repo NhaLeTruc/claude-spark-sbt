@@ -2,22 +2,28 @@ package com.etl.core
 
 import com.etl.config.PipelineConfig
 import com.etl.model.{PipelineFailure, PipelineResult, PipelineSuccess}
-import com.etl.util.{Logging, Retry}
+import com.etl.util.{CircuitBreaker, Logging, Retry}
 import org.apache.spark.sql.SparkSession
 import org.slf4j.LoggerFactory
 
+import scala.collection.concurrent.TrieMap
+
 /**
- * Executes pipelines with retry logic and metrics tracking.
+ * Executes pipelines with retry logic, circuit breaker, and metrics tracking.
  * Integrates retry utility and wraps pipeline execution with proper error handling.
+ * Circuit breakers are maintained per pipeline ID for isolation.
  */
 class PipelineExecutor extends Logging {
   private val logger = LoggerFactory.getLogger(getClass)
 
+  // Circuit breakers per pipeline ID (thread-safe)
+  private val circuitBreakers = new TrieMap[String, CircuitBreaker]()
+
   /**
-   * Execute a pipeline with retry logic.
+   * Execute a pipeline with retry logic and circuit breaker.
    *
    * @param pipeline Pipeline to execute
-   * @param config Pipeline configuration (includes retry settings)
+   * @param config Pipeline configuration (includes retry and circuit breaker settings)
    * @param spark SparkSession for execution
    * @return PipelineResult with success or failure details
    */
@@ -27,20 +33,26 @@ class PipelineExecutor extends Logging {
     // Create execution context
     val context = ExecutionContext.create(spark, config)
 
+    // Get or create circuit breaker for this pipeline
+    val circuitBreaker = getCircuitBreaker(config)
+
     // Log with MDC context
     withMDC(context.getMDCContext) {
+      val cbConfig = config.errorHandlingConfig.circuitBreakerConfig
+
       logger.info(
         s"Pipeline execution started. " +
-          s"Retry config: maxAttempts=${config.retry.maxAttempts}, " +
-          s"delaySeconds=${config.retry.delaySeconds}"
+          s"Retry config: maxAttempts=${config.errorHandlingConfig.retryConfig.maxAttempts}, " +
+          s"delaySeconds=${config.errorHandlingConfig.retryConfig.initialDelaySeconds}, " +
+          s"Circuit breaker: enabled=${cbConfig.enabled}, " +
+          s"failureThreshold=${cbConfig.failureThreshold}"
       )
 
-      // Execute with retry logic
-      val result = Retry.withRetry(
-        maxAttempts = config.retry.maxAttempts,
-        delayMillis = config.retry.delaySeconds * 1000L
-      ) {
-        executePipeline(pipeline, context)
+      // Execute with circuit breaker and retry logic
+      val result = if (cbConfig.enabled) {
+        executeWithCircuitBreaker(pipeline, context, circuitBreaker, config)
+      } else {
+        executeWithRetryOnly(pipeline, context, config)
       }
 
       // Handle result
@@ -60,12 +72,87 @@ class PipelineExecutor extends Logging {
         case Left(error) =>
           val finalMetrics = context.metrics.complete()
           logger.error(
-            s"Pipeline execution failed after ${config.retry.maxAttempts} attempts. " +
+            s"Pipeline execution failed after ${config.errorHandlingConfig.retryConfig.maxAttempts} attempts. " +
               s"Error: ${error.getMessage}",
             Some(error)
           )
           PipelineFailure(finalMetrics, error)
       }
+    }
+  }
+
+  /**
+   * Get or create circuit breaker for a pipeline.
+   */
+  private def getCircuitBreaker(config: PipelineConfig): CircuitBreaker = {
+    circuitBreakers.getOrElseUpdate(
+      config.pipelineId,
+      {
+        val cbConfig = config.errorHandlingConfig.circuitBreakerConfig
+        val cb = new CircuitBreaker(
+          name = s"pipeline-${config.pipelineId}",
+          failureThreshold = cbConfig.failureThreshold,
+          resetTimeoutMillis = cbConfig.resetTimeoutSeconds * 1000L,
+          halfOpenMaxAttempts = cbConfig.halfOpenMaxAttempts
+        )
+        logger.info(
+          s"Created circuit breaker for pipeline ${config.pipelineId}: " +
+            s"threshold=${cbConfig.failureThreshold}, " +
+            s"resetTimeout=${cbConfig.resetTimeoutSeconds}s"
+        )
+        cb
+      }
+    )
+  }
+
+  /**
+   * Execute with circuit breaker protection.
+   */
+  private def executeWithCircuitBreaker(
+    pipeline: Pipeline,
+    context: ExecutionContext,
+    circuitBreaker: CircuitBreaker,
+    config: PipelineConfig
+  ): Either[Throwable, PipelineResult] = {
+    // Check circuit breaker state before executing
+    if (!circuitBreaker.canExecute) {
+      val error = new RuntimeException(
+        s"Circuit breaker is OPEN for pipeline ${config.pipelineId}. " +
+          s"Failure rate: ${circuitBreaker.getFailureRate}%, " +
+          s"State: ${circuitBreaker.getState}"
+      )
+      logger.error(error.getMessage)
+      return Left(error)
+    }
+
+    // Execute with retry
+    Retry.withRetry(
+      maxAttempts = config.errorHandlingConfig.retryConfig.maxAttempts,
+      delayMillis = config.errorHandlingConfig.retryConfig.initialDelaySeconds * 1000L
+    ) {
+      // Wrap in circuit breaker
+      circuitBreaker.execute {
+        executePipeline(pipeline, context)
+      } match {
+        case Right(result) => result
+        case Left(error) => throw error
+      }
+    }
+  }
+
+  /**
+   * Execute with retry only (no circuit breaker).
+   */
+  private def executeWithRetryOnly(
+    pipeline: Pipeline,
+    context: ExecutionContext,
+    config: PipelineConfig
+  ): Either[Throwable, PipelineResult] = {
+    Retry.withRetry(
+      maxAttempts = config.errorHandlingConfig.retryConfig.maxAttempts,
+      delayMillis = config.errorHandlingConfig.retryConfig.initialDelaySeconds * 1000L
+    ) {
+      executePipeline(pipeline, context)
     }
   }
 
