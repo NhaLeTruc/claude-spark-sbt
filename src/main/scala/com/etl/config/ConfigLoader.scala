@@ -181,6 +181,49 @@ object ConfigLoader {
       warnings += "Retry maxAttempts must be non-negative"
     }
 
+    // Check for SQL injection risks in extract query
+    val sqlWarnings = config.extract.validateQuery()
+    warnings ++= sqlWarnings
+
+    // Check circuit breaker configuration
+    val cbConfig = config.errorHandlingConfig.circuitBreakerConfig
+    if (cbConfig.enabled) {
+      if (cbConfig.failureThreshold <= 0) {
+        warnings += "Circuit breaker failureThreshold must be positive"
+      }
+      if (cbConfig.resetTimeoutSeconds <= 0) {
+        warnings += "Circuit breaker resetTimeoutSeconds must be positive"
+      }
+      if (cbConfig.halfOpenMaxAttempts <= 0) {
+        warnings += "Circuit breaker halfOpenMaxAttempts must be positive"
+      }
+    }
+
+    // Check performance config
+    config.performanceConfig.shufflePartitions.foreach { partitions =>
+      if (partitions <= 0) {
+        warnings += "Performance shufflePartitions must be positive"
+      }
+    }
+
+    config.performanceConfig.broadcastThreshold.foreach { threshold =>
+      if (threshold < 0) {
+        warnings += "Performance broadcastThreshold must be non-negative"
+      }
+    }
+
+    // Warn about deprecated usage
+    if (config.retryConfig ne config.errorHandlingConfig.retryConfig) {
+      // If someone is still using the deprecated path
+      warnings += "Using deprecated retryConfig accessor, migrate to errorHandlingConfig.retryConfig"
+    }
+
+    // Log warnings
+    if (warnings.nonEmpty) {
+      logger.warn(s"Configuration validation warnings for pipeline ${config.pipelineId}:")
+      warnings.foreach(w => logger.warn(s"  - $w"))
+    }
+
     warnings.toSeq
   }
 }
