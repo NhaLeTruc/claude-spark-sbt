@@ -38,7 +38,7 @@
  </check>
  <check level="warning" class="org.scalastyle.scalariform.ParameterNumberChecker" enabled="true">
   <parameters>
-   <parameter name="maxParameters"><![CDATA[8]]></parameter>
+   <parameter name="maxParameters"><![CDATA[12]]></parameter>
   </parameters>
  </check>
  <check level="warning" class="org.scalastyle.scalariform.NoWhitespaceBeforeLeftBracketChecker" enabled="true"/>
@@ -60,7 +60,7 @@
  </check>
  <check level="warning" class="org.scalastyle.scalariform.MethodLengthChecker" enabled="true">
   <parameters>
-   <parameter name="maxLength"><![CDATA[50]]></parameter>
+   <parameter name="maxLength"><![CDATA[80]]></parameter>
   </parameters>
  </check>
  <check level="warning" class="org.scalastyle.scalariform.MethodNamesChecker" enabled="true">

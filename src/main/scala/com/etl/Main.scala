@@ -72,6 +72,7 @@ object Main {
         // Check for shutdown during execution
         if (shutdownHandler.isShutdownInitiated) {
           logger.warn("Shutdown initiated before pipeline execution, exiting...")
+          healthCheck.stop()
           System.exit(0)
         }
 
@@ -182,13 +183,18 @@ object Main {
     }
 
     // Apply performance configuration
-    builder
-      .config("spark.sql.shuffle.partitions", config.performance.parallelism.toString)
-      .config("spark.default.parallelism", config.performance.parallelism.toString)
+    config.performanceConfig.shufflePartitions.foreach { partitions =>
+      builder.config("spark.sql.shuffle.partitions", partitions.toString)
+      builder.config("spark.default.parallelism", partitions.toString)
+    }
+
+    config.performanceConfig.broadcastThreshold.foreach { threshold =>
+      builder.config("spark.sql.autoBroadcastJoinThreshold", threshold.toString)
+    }
 
     val spark = builder.getOrCreate()
 
-    spark.sparkContext.setLogLevel(config.logging.level)
+    spark.sparkContext.setLogLevel(config.loggingConfig.logLevel)
     logger.info(s"SparkSession initialized: ${spark.version}")
 
     spark
@@ -239,8 +245,13 @@ object Main {
       case SourceType.S3 =>
         new S3Extractor()
 
+      case SourceType.DeltaLake =>
+        new DeltaLakeExtractor()
+
       case other =>
-        throw new IllegalArgumentException(s"Unsupported source type: $other")
+        throw new IllegalArgumentException(
+          s"Unsupported source type: $other. Valid options: Kafka, PostgreSQL, MySQL, S3, DeltaLake"
+        )
     }
   }
 
@@ -256,18 +267,15 @@ object Main {
         new AggregationTransformer()
 
       case TransformType.Join =>
-        // For join, we need a right DataFrame - this would be loaded from config
-        // For now, throw an error indicating join needs special handling
-        throw new IllegalArgumentException(
-          "Join transformer requires special initialization with right DataFrame. " +
-            "Use pipeline builder with explicit right dataset."
-        )
+        new JoinTransformer()
 
       case TransformType.Window =>
         new WindowTransformer()
 
       case other =>
-        throw new IllegalArgumentException(s"Unsupported transform type: $other")
+        throw new IllegalArgumentException(
+          s"Unsupported transform type: $other. Valid options: Aggregation, Join, Window"
+        )
     }
   }
 
@@ -291,8 +299,13 @@ object Main {
       case SinkType.S3 =>
         new S3Loader()
 
+      case SinkType.DeltaLake =>
+        new DeltaLakeLoader()
+
       case other =>
-        throw new IllegalArgumentException(s"Unsupported sink type: $other")
+        throw new IllegalArgumentException(
+          s"Unsupported sink type: $other. Valid options: Kafka, PostgreSQL, MySQL, S3, DeltaLake"
+        )
     }
   }
 

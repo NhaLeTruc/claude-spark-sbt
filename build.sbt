@@ -45,8 +45,11 @@ libraryDependencies ++= Seq(
 
 // Assembly settings for spark-submit
 assembly / assemblyMergeStrategy := {
-  case PathList("META-INF", xs @ _*) => MergeStrategy.discard
+  case PathList("META-INF", "services", xs @ _*) => MergeStrategy.concat
+  case PathList("META-INF", "MANIFEST.MF") => MergeStrategy.discard
+  case PathList("META-INF", xs @ _*) => MergeStrategy.first
   case "reference.conf" => MergeStrategy.concat
+  case "application.conf" => MergeStrategy.concat
   case x => MergeStrategy.first
 }
 
@@ -65,5 +68,9 @@ scalacOptions ++= Seq(
   "-Xlint",
   "-Ywarn-dead-code",
   "-Ywarn-numeric-widen",
-  "-Ywarn-value-discard"
+  "-Ywarn-value-discard",
+  "-Ywarn-unused:imports",
+  "-Ywarn-unused:locals",
+  "-Ywarn-unused:privates",
+  "-Ywarn-unused:patvars"
 )
