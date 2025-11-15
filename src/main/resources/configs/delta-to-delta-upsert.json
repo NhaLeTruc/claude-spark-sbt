@@ -1,0 +1,81 @@
+{
+  "pipelineId": "delta-to-delta-upsert",
+  "name": "Delta Lake to Delta Lake with Upsert",
+  "mode": "batch",
+  "extract": {
+    "sourceType": "DeltaLake",
+    "path": "s3a://my-bucket/source-table",
+    "schemaName": "transaction",
+    "connectionParams": {
+      "versionAsOf": "latest",
+      "timestampAsOf": ""
+    }
+  },
+  "transforms": [
+    {
+      "transformType": "Aggregation",
+      "parameters": {
+        "groupBy": "[\"account_id\", \"transaction_date\"]",
+        "aggregations": "[{\"column\":\"amount\",\"function\":\"sum\",\"alias\":\"daily_total\"},{\"column\":\"transaction_id\",\"function\":\"count\",\"alias\":\"transaction_count\"}]"
+      }
+    }
+  },
+  "load": {
+    "sinkType": "DeltaLake",
+    "path": "s3a://my-bucket/aggregated-table",
+    "writeMode": "Upsert",
+    "upsertKeys": ["account_id", "transaction_date"],
+    "schemaName": "transaction",
+    "connectionParams": {
+      "mergeSchema": "true",
+      "optimizeWrite": "true"
+    }
+  },
+  "performanceConfig": {
+    "shufflePartitions": 200,
+    "broadcastThreshold": 10485760
+  },
+  "errorHandlingConfig": {
+    "retryConfig": {
+      "strategy": "ExponentialBackoff",
+      "maxAttempts": 3,
+      "initialDelaySeconds": 5,
+      "maxDelaySeconds": 60
+    },
+    "circuitBreakerConfig": {
+      "enabled": true,
+      "failureThreshold": 5,
+      "resetTimeoutSeconds": 60
+    },
+    "dlqConfig": {
+      "dlqType": "S3",
+      "bucketPath": "s3a://my-bucket/dlq/delta-upsert/",
+      "format": "parquet"
+    }
+  },
+  "dataQualityConfig": {
+    "enabled": true,
+    "validateAfterExtract": true,
+    "validateAfterTransform": true,
+    "onFailure": "abort",
+    "rules": [
+      {
+        "ruleType": "NotNull",
+        "columns": ["account_id", "transaction_date"],
+        "severity": "error"
+      },
+      {
+        "ruleType": "Range",
+        "columns": ["daily_total"],
+        "parameters": {
+          "min": 0
+        },
+        "severity": "error"
+      }
+    ]
+  },
+  "loggingConfig": {
+    "logLevel": "INFO",
+    "includeMetrics": true
+  }
+}

@@ -1,0 +1,91 @@
+{
+  "pipelineId": "streaming-kafka-enrichment",
+  "name": "Real-time Kafka Stream Enrichment and Aggregation",
+  "mode": "streaming",
+  "extract": {
+    "sourceType": "Kafka",
+    "topic": "raw-events",
+    "schemaName": "user-event",
+    "connectionParams": {
+      "kafka.bootstrap.servers": "localhost:9092",
+      "subscribe": "raw-events",
+      "startingOffsets": "latest",
+      "maxOffsetsPerTrigger": "10000",
+      "failOnDataLoss": "false"
+    }
+  },
+  "transforms": [
+    {
+      "transformType": "Window",
+      "parameters": {
+        "windowDuration": "5 minutes",
+        "slideDuration": "1 minute",
+        "watermarkColumn": "timestamp",
+        "watermarkDelay": "10 minutes"
+      }
+    },
+    {
+      "transformType": "Aggregation",
+      "parameters": {
+        "groupBy": "[\"window\", \"user_id\", \"event_type\"]",
+        "aggregations": "[{\"column\":\"amount\",\"function\":\"sum\",\"alias\":\"total_amount\"},{\"column\":\"event_id\",\"function\":\"count\",\"alias\":\"event_count\"},{\"column\":\"amount\",\"function\":\"avg\",\"alias\":\"avg_amount\"}]"
+      }
+    }
+  ],
+  "load": {
+    "sinkType": "Kafka",
+    "topic": "enriched-events",
+    "schemaName": "user-summary",
+    "writeMode": "Append",
+    "connectionParams": {
+      "kafka.bootstrap.servers": "localhost:9092",
+      "topic": "enriched-events",
+      "checkpointLocation": "/tmp/kafka-checkpoint"
+    }
+  },
+  "streamingConfigJson": {
+    "triggerMode": "ProcessingTime",
+    "triggerInterval": "30 seconds",
+    "checkpointLocation": "/tmp/streaming-checkpoint",
+    "statefulAggregation": true,
+    "watermarkDelay": "10 minutes"
+  },
+  "performanceConfig": {
+    "shufflePartitions": 100
+  },
+  "errorHandlingConfig": {
+    "retryConfig": {
+      "strategy": "ExponentialBackoff",
+      "maxAttempts": 5,
+      "initialDelaySeconds": 2
+    },
+    "circuitBreakerConfig": {
+      "enabled": true,
+      "failureThreshold": 10,
+      "resetTimeoutSeconds": 120
+    },
+    "dlqConfig": {
+      "dlqType": "Kafka",
+      "bootstrapServers": "localhost:9092",
+      "topic": "dlq-enriched-events"
+    },
+    "failFast": false
+  },
+  "dataQualityConfig": {
+    "enabled": true,
+    "validateAfterExtract": false,
+    "validateAfterTransform": true,
+    "onFailure": "continue",
+    "rules": [
+      {
+        "ruleType": "NotNull",
+        "columns": ["user_id", "event_type"],
+        "severity": "warning"
+      }
+    ]
+  },
+  "loggingConfig": {
+    "logLevel": "INFO",
+    "includeMetrics": true
+  }
+}
