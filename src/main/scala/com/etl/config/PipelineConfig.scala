@@ -72,7 +72,33 @@ case class ExtractConfig(
   path: Option[String] = None,
   schemaName: String,
   credentialId: Option[String] = None
-)
+) {
+  // Validate source-specific requirements
+  sourceType match {
+    case SourceType.Kafka =>
+      require(topic.isDefined, "topic is required for Kafka source")
+    case SourceType.S3 | SourceType.DeltaLake =>
+      require(path.isDefined, "path is required for S3/DeltaLake source")
+    case SourceType.PostgreSQL | SourceType.MySQL =>
+      require(query.isDefined || connectionParams.contains("table"),
+        "query or table parameter is required for JDBC sources")
+    case _ => // No specific requirements
+  }
+
+  /**
+   * Validate SQL query for potential injection risks (basic check).
+   * Returns warnings, not errors, to avoid false positives.
+   */
+  def validateQuery(): Seq[String] = {
+    query match {
+      case Some(q) if q.contains("--") || q.contains(";--") =>
+        Seq("Warning: Query contains SQL comment markers (--) which could indicate injection risk")
+      case Some(q) if q.toLowerCase.matches(".*\\b(drop|delete|truncate|alter)\\b.*") =>
+        Seq("Warning: Query contains potentially dangerous SQL keywords (DROP/DELETE/TRUNCATE/ALTER)")
+      case _ => Seq.empty
+    }
+  }
+}
 
 /**
  * Configuration for data transformation.
@@ -108,7 +134,24 @@ case class LoadConfig(
   upsertKeys: Option[Seq[String]] = None,
   schemaName: String,
   credentialId: Option[String] = None
-)
+) {
+  // Validate sink-specific requirements
+  sinkType match {
+    case SinkType.Kafka =>
+      require(topic.isDefined, "topic is required for Kafka sink")
+    case SinkType.S3 | SinkType.DeltaLake =>
+      require(path.isDefined, "path is required for S3/DeltaLake sink")
+    case SinkType.PostgreSQL | SinkType.MySQL =>
+      require(table.isDefined, "table is required for JDBC sinks")
+    case _ => // No specific requirements
+  }
+
+  // Validate upsert keys when writeMode is Upsert
+  if (writeMode.toLowerCase == "upsert") {
+    require(upsertKeys.isDefined && upsertKeys.get.nonEmpty,
+      "upsertKeys must be specified when writeMode is Upsert")
+  }
+}
 
 /**
  * Retry strategy type for error handling.

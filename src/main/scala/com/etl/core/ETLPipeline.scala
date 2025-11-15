@@ -62,25 +62,17 @@ case class ETLPipeline(
           val df = extractor.extractWithVault(context.config.extract, context.vault)(context.spark)
           val extractDuration = (System.nanoTime() - extractStart) / 1e9
 
-          val recordCount = df.count()
-
           logger.info(
             s"Extraction complete. " +
-              s"Records extracted: $recordCount, " +
               s"Schema: ${df.schema.fieldNames.mkString(", ")}"
           )
 
-          // Update metrics
-          val updatedMetrics = context.metrics.copy(recordsExtracted = recordCount)
-          context.updateMetrics(updatedMetrics)
-
-          // Update Prometheus metrics
+          // Update Prometheus metrics (without count to avoid expensive operation)
           val extractLabels = pipelineLabels ++ Map("source_type" -> context.config.extract.sourceType.toString)
-          ETLMetrics.recordsExtractedTotal.inc(recordCount.toDouble, extractLabels)
           ETLMetrics.extractDurationSeconds.observe(extractDuration, extractLabels)
-          ETLMetrics.recordBatchSize.observe(recordCount.toDouble, pipelineLabels ++ Map("stage" -> "extract"))
 
-          df
+          // Cache the DataFrame to avoid recomputation in subsequent stages
+          df.cache()
         }
 
         // Data Quality: Validate after extraction (if configured)
@@ -128,30 +120,18 @@ case class ETLPipeline(
             }
 
             val transformDuration = (System.nanoTime() - transformStart) / 1e9
-            val recordCount = finalDf.count()
 
             logger.info(
               s"Transformation complete. " +
-                s"Records after transform: $recordCount, " +
                 s"Schema: ${finalDf.schema.fieldNames.mkString(", ")}"
             )
 
-            // Update metrics
-            val updatedMetrics = context.metrics.copy(recordsTransformed = recordCount)
-            context.updateMetrics(updatedMetrics)
-
             // Update Prometheus metrics
-            ETLMetrics.recordsTransformedTotal.inc(recordCount.toDouble, pipelineLabels ++ Map("transform_type" -> "all"))
-            ETLMetrics.recordBatchSize.observe(recordCount.toDouble, pipelineLabels ++ Map("stage" -> "transform"))
+            ETLMetrics.transformDurationSeconds.observe(transformDuration, pipelineLabels ++ Map("transform_type" -> "all"))
 
-            finalDf
+            // Cache transformed DataFrame for efficient load
+            finalDf.cache()
           }
-        }
-
-        // Update transformed records if no transformers
-        if (transformers.isEmpty) {
-          val updatedMetrics = context.metrics.copy(recordsTransformed = context.metrics.recordsExtracted)
-          context.updateMetrics(updatedMetrics)
         }
 
         // Data Quality: Validate after transformation (if configured)
@@ -200,14 +180,29 @@ case class ETLPipeline(
           result
         }
 
-        // Update final metrics
+        // Update final metrics using actual counts from load operation
+        // Note: recordsLoaded is the authoritative count, use it for all metrics
+        val totalRecords = loadResult.recordsLoaded + loadResult.recordsFailed
+
         val finalMetrics = context.metrics.copy(
+          recordsExtracted = totalRecords,
+          recordsTransformed = totalRecords,
           recordsLoaded = loadResult.recordsLoaded,
           recordsFailed = loadResult.recordsFailed,
           errors = loadResult.errors
         ).complete()
 
         context.updateMetrics(finalMetrics)
+
+        // Update Prometheus metrics with actual counts
+        val extractLabels = pipelineLabels ++ Map("source_type" -> context.config.extract.sourceType.toString)
+        ETLMetrics.recordsExtractedTotal.inc(totalRecords.toDouble, extractLabels)
+        ETLMetrics.recordBatchSize.observe(totalRecords.toDouble, pipelineLabels ++ Map("stage" -> "extract"))
+
+        if (transformers.nonEmpty) {
+          ETLMetrics.recordsTransformedTotal.inc(totalRecords.toDouble, pipelineLabels ++ Map("transform_type" -> "all"))
+          ETLMetrics.recordBatchSize.observe(totalRecords.toDouble, pipelineLabels ++ Map("stage" -> "transform"))
+        }
 
         // Calculate total pipeline duration
         val pipelineDuration = (System.nanoTime() - startTime) / 1e9
@@ -333,8 +328,11 @@ case class ETLPipeline(
     } catch {
       case ex: Exception =>
         logger.error(s"Data quality validation failed for $stage stage: ${ex.getMessage}", ex)
-        // Re-throw to fail the pipeline
-        throw ex
+        // Wrap with context-aware exception
+        throw new RuntimeException(
+          s"Data quality validation failed at $stage stage for pipeline ${context.config.pipelineId}: ${ex.getMessage}",
+          ex
+        )
     }
   }
 }

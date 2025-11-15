@@ -1,2 +1,31 @@
+# IDE
 .vscode
 .metals
+.bsp
+.idea
+
+# SBT
+target/
+project/target/
+project/project/
+
+# Scala
+*.class
+*.log
+
+# Environment
+.env
+
+# OS
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Test output
+test-output/
+*.db
+
+# Assembly
+*.jar
+!project/
