@@ -1,5 +1,8 @@
 version: '3.8'
 
+# Use environment variables from .env file
+# Copy .env.example to .env and customize as needed
+
 services:
   # Zookeeper for Kafka
   zookeeper:
@@ -87,9 +90,9 @@ services:
     ports:
       - "5432:5432"
     environment:
-      POSTGRES_USER: etl_user
-      POSTGRES_PASSWORD: etl_password
-      POSTGRES_DB: etl_database
+      POSTGRES_USER: ${POSTGRES_USER:-etl_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-etl_password}
+      POSTGRES_DB: ${POSTGRES_DB:-etl_database}
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./docker/init-scripts/postgres:/docker-entrypoint-initdb.d
@@ -108,10 +111,10 @@ services:
     ports:
       - "3306:3306"
     environment:
-      MYSQL_ROOT_PASSWORD: root_password
-      MYSQL_DATABASE: etl_database
-      MYSQL_USER: etl_user
-      MYSQL_PASSWORD: etl_password
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root_password}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-etl_database}
+      MYSQL_USER: ${MYSQL_USER:-etl_user}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-etl_password}
     volumes:
       - mysql-data:/var/lib/mysql
       - ./docker/init-scripts/mysql:/docker-entrypoint-initdb.d
@@ -135,9 +138,9 @@ services:
       SERVICES: s3
       DEBUG: 1
       DATA_DIR: /tmp/localstack/data
-      AWS_ACCESS_KEY_ID: test
-      AWS_SECRET_ACCESS_KEY: test
-      AWS_DEFAULT_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-test}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-test}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
     volumes:
       - localstack-data:/tmp/localstack
       - ./docker/init-scripts/s3:/docker-entrypoint-initaws.d

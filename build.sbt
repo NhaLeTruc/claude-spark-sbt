@@ -74,3 +74,10 @@ scalacOptions ++= Seq(
   "-Ywarn-unused:privates",
   "-Ywarn-unused:patvars"
 )
+
+// Code coverage settings
+coverageMinimumStmtTotal := 85
+coverageMinimumBranchTotal := 75
+coverageFailOnMinimum := true
+coverageHighlighting := true
+coverageExcludedPackages := "<empty>;.*BuildInfo.*"

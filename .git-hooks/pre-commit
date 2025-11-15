@@ -1,0 +1,54 @@
+#!/bin/bash
+# Pre-commit hook for claude-spark-sbt
+# Install: ln -s ../../.git-hooks/pre-commit .git/hooks/pre-commit
+
+set -e
+
+echo "🔍 Running pre-commit checks..."
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Check if SBT is available
+if ! command -v sbt &> /dev/null; then
+    echo -e "${YELLOW}⚠️  SBT not found, skipping build checks${NC}"
+    exit 0
+fi
+
+echo "📋 Checking code formatting..."
+if sbt scalafmtCheckAll scalafmtSbtCheck; then
+    echo -e "${GREEN}✓ Code formatting check passed${NC}"
+else
+    echo -e "${RED}✗ Code formatting issues found${NC}"
+    echo "Run 'sbt scalafmtAll scalafmtSbt' to fix formatting"
+    exit 1
+fi
+
+echo "🎨 Running scalastyle..."
+if sbt scalastyle; then
+    echo -e "${GREEN}✓ Scalastyle check passed${NC}"
+else
+    echo -e "${YELLOW}⚠️  Scalastyle warnings found${NC}"
+    # Don't fail on warnings, just notify
+fi
+
+echo "🔨 Compiling..."
+if sbt compile; then
+    echo -e "${GREEN}✓ Compilation successful${NC}"
+else
+    echo -e "${RED}✗ Compilation failed${NC}"
+    exit 1
+fi
+
+echo "🧪 Running tests..."
+if sbt test; then
+    echo -e "${GREEN}✓ All tests passed${NC}"
+else
+    echo -e "${RED}✗ Tests failed${NC}"
+    exit 1
+fi
+
+echo -e "${GREEN}✅ All pre-commit checks passed!${NC}"
