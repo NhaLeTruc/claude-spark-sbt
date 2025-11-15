@@ -1,0 +1,110 @@
+{
+  "pipelineId": "postgres-to-s3-archival",
+  "name": "PostgreSQL Historical Data Archival to S3",
+  "mode": "batch",
+  "extract": {
+    "sourceType": "PostgreSQL",
+    "query": "SELECT * FROM transactions WHERE transaction_date >= CURRENT_DATE - INTERVAL '90 days' AND archived = false",
+    "schemaName": "transaction",
+    "credentialId": "postgres-prod",
+    "connectionParams": {
+      "url": "jdbc:postgresql://prod-db.example.com:5432/finance",
+      "driver": "org.postgresql.Driver",
+      "fetchSize": "10000",
+      "partitionColumn": "transaction_id",
+      "lowerBound": "1",
+      "upperBound": "1000000",
+      "numPartitions": "10"
+    }
+  },
+  "transforms": [
+    {
+      "transformType": "Aggregation",
+      "parameters": {
+        "description": "Add partitioning columns for efficient S3 storage",
+        "groupBy": "[\"transaction_id\", \"transaction_date\", \"account_id\", \"amount\", \"status\"]",
+        "aggregations": "[{\"column\":\"transaction_date\",\"function\":\"first\",\"alias\":\"year_partition\"},{\"column\":\"transaction_date\",\"function\":\"first\",\"alias\":\"month_partition\"}]",
+        "additionalColumns": {
+          "year_partition": "year(transaction_date)",
+          "month_partition": "month(transaction_date)",
+          "archived_timestamp": "current_timestamp()"
+        }
+      }
+    }
+  ],
+  "load": {
+    "sinkType": "S3",
+    "path": "s3a://company-data-lake/archived/transactions/",
+    "writeMode": "Append",
+    "schemaName": "transaction",
+    "credentialId": "aws-s3",
+    "connectionParams": {
+      "format": "parquet",
+      "compression": "snappy",
+      "partitionBy": "year_partition,month_partition",
+      "mode": "append",
+      "fs.s3a.endpoint": "s3.us-east-1.amazonaws.com",
+      "fs.s3a.connection.ssl.enabled": "true"
+    }
+  },
+  "performanceConfig": {
+    "shufflePartitions": 50,
+    "broadcastThreshold": 52428800
+  },
+  "errorHandlingConfig": {
+    "retryConfig": {
+      "strategy": "ExponentialBackoff",
+      "maxAttempts": 3,
+      "initialDelaySeconds": 10,
+      "maxDelaySeconds": 300,
+      "backoffMultiplier": 2.0,
+      "jitter": true
+    },
+    "circuitBreakerConfig": {
+      "enabled": true,
+      "failureThreshold": 3,
+      "resetTimeoutSeconds": 180
+    },
+    "dlqConfig": {
+      "dlqType": "S3",
+      "bucketPath": "s3a://company-data-lake/dlq/archival-failures/",
+      "partitionBy": "date",
+      "format": "json"
+    },
+    "failFast": false
+  },
+  "dataQualityConfig": {
+    "enabled": true,
+    "validateAfterExtract": true,
+    "validateAfterTransform": true,
+    "onFailure": "abort",
+    "rules": [
+      {
+        "ruleType": "NotNull",
+        "name": "Required Fields Check",
+        "columns": ["transaction_id", "transaction_date", "account_id", "amount"],
+        "severity": "error"
+      },
+      {
+        "ruleType": "Range",
+        "name": "Amount Validation",
+        "columns": ["amount"],
+        "parameters": {
+          "min": 0.01,
+          "max": 1000000.0
+        },
+        "severity": "warning"
+      },
+      {
+        "ruleType": "Unique",
+        "name": "Transaction ID Uniqueness",
+        "columns": ["transaction_id"],
+        "severity": "error"
+      }
+    ]
+  },
+  "loggingConfig": {
+    "logLevel": "INFO",
+    "includeMetrics": true
+  }
+}
